@@ -1,0 +1,49 @@
+[project]
+name = "ember"
+version = "1.0.1"
+description = "Basic utils and base classes for training and evaluating models in PyTorch"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {file = "LICENSE"}
+keywords = ["pytorch", "base classes"]
+authors = [
+  {name = "Georgios (Yiorgos) Chochlakis", email = "georgioschochlakis@gmail.com" }
+]
+maintainers = [
+  {name = "Georgios (Yiorgos) Chochlakis", email = "georgioschochlakis@gmail.com" }
+]
+
+# Classifiers help users find your project by categorizing it.
+#
+# For a list of valid classifiers, see https://pypi.org/classifiers/
+classifiers = [  # Optional
+  # Common values are
+  #   3 - Alpha
+  #   4 - Beta
+  #   5 - Production/Stable
+  "Development Status :: 3 - Alpha",
+
+  "License :: OSI Approved :: MIT License",
+
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.7",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+dependencies = [
+  "torch",
+  "transformers",
+  "legm @ git+https://github.com/gchochla/legm.git@main",
+]
+
+[project.optional-dependencies]
+dev = ["black", "pytest"]
+
+[project.urls]
+"Homepage" = "https://github.com/gchochla/ember"
+"Bug Reports" = "https://github.com/gchochla/ember/issues"
+"Source" = "https://github.com/gchochla/ember"
