@@ -91,9 +91,6 @@ class BaseTrainer(ABC):
                 help="weight decay to apply (if not zero) to all layers "
                 "except all bias and LayerNorm weights in AdamW optimizer.",
             ),
-            correct_bias=dict(
-                action="store_true", help="correct bias in AdamW"
-            ),
             train_batch_size=dict(
                 default=32, type=int, help="train batch size"
             ),
@@ -142,7 +139,7 @@ class BaseTrainer(ABC):
 
         Args:
             model: model to train.
-            experiment_handler: hyperparameter and logging handler.
+            experiment_manager: hyperparameter and logging handler.
             train_dataset: train dataset.
             dev_dataset: dev dataset.
             test_dataset: test dataset.
@@ -494,7 +491,7 @@ class BaseTrainer(ABC):
 
     def train(self):
         """Trains and, if a dev set or test set was provided, evaluates
-        the model. (Optimizer is without bias correction)."""
+        the model."""
 
         self.model = self.model.to(self.exp_manager.device)
         self.model.train()
