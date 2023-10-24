@@ -1,6 +1,6 @@
 [project]
 name = "ember"
-version = "1.0.1"
+version = "1.0.2"
 description = "Basic utils and base classes for training and evaluating models in PyTorch"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -37,6 +37,7 @@ classifiers = [  # Optional
 dependencies = [
   "torch",
   "transformers",
+  "scikit-learn",
   "legm @ git+https://github.com/gchochla/legm.git@main",
 ]
 
