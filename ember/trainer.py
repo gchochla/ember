@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Union, Dict, List, Sequence, Any, Tuple
+from typing import Optional, Union, Dict, List, Sequence, Any, Tuple, Mapping
 from abc import ABC, abstractmethod
 from time import time
 
@@ -169,13 +169,21 @@ class BaseTrainer(ABC):
         )
         self.exp_manager = experiment_manager
 
-        self.early_stopping = EarlyStopping(
-            self.model,
-            self.exp_manager.early_stopping_patience,
-            self.exp_manager.model_save,
-            lower_better=self.exp_manager.lower_better,
-            logging_level=logging_level,
-        )
+        if hasattr(self.exp_manager, "early_stopping_patience"):
+            self.early_stopping = EarlyStopping(
+                self.model,
+                self.exp_manager.early_stopping_patience,
+                self.exp_manager.model_save,
+                lower_better=self.exp_manager.lower_better,
+                logging_level=logging_level,
+            )
+        else:
+            self.early_stopping = EarlyStopping(
+                self.model,
+                None,
+                self.exp_manager.model_save,
+                logging_level=logging_level,
+            )
 
         self.verbose = not self.exp_manager.disable_tqdm
 
@@ -191,9 +199,6 @@ class BaseTrainer(ABC):
             self.exp_manager.num_train_epochs is not None
             or self.exp_manager.max_steps > -1
         )
-
-        if self.exp_manager.early_stopping_metric is not None:
-            self.early_stopping_metric = self.exp_manager.early_stopping_metric
 
         assert not self.do_train or (
             self.set_num_steps
@@ -259,51 +264,80 @@ class BaseTrainer(ABC):
             data_loader: DataLoader the model was evaluated on.
         """
 
-    def batch_to_device(self, batch: Sequence[Any]) -> Sequence[Any]:
+    def batch_to_device(
+        self, batch: Sequence[Any] | Mapping[str, Any]
+    ) -> Sequence[Any] | Mapping[str, Any]:
         """Get batch as returned by DataLoader to device."""
 
-        device_batch = []
-        for elem in batch:
-            # TENSOR
-            if torch.is_tensor(elem):
-                device_batch.append(elem.to(self.exp_manager.device))
-            # DICTIONARY
-            elif isinstance(elem, dict):
-                device_batch.append(
-                    {
-                        k: (
+        if isinstance(batch, Sequence):
+            device_batch = []
+            for elem in batch:
+                # TENSOR
+                if torch.is_tensor(elem):
+                    device_batch.append(elem.to(self.exp_manager.device))
+                # DICTIONARY
+                elif isinstance(elem, dict):
+                    device_batch.append(
+                        {
+                            k: (
+                                v.to(self.exp_manager.device)
+                                if torch.is_tensor(v)
+                                else v
+                            )
+                            for k, v in elem.items()
+                        }
+                    )
+                # LIST, TUPLE, etc.
+                elif isinstance(elem, Sequence):
+                    device_batch.append(
+                        [
                             v.to(self.exp_manager.device)
                             if torch.is_tensor(v)
                             else v
+                            for v in elem
+                        ]
+                    )
+                # OTHER (like strings)
+                else:
+                    device_batch.append(elem)
+
+        else:
+            device_batch = {}
+            for k, v in batch.items():
+                if torch.is_tensor(v):
+                    device_batch[k] = v.to(self.exp_manager.device)
+                elif isinstance(v, Mapping):
+                    device_batch[k] = {
+                        k2: (
+                            v2.to(self.exp_manager.device)
+                            if torch.is_tensor(v2)
+                            else v2
                         )
-                        for k, v in elem.items()
+                        for k2, v2 in v.items()
                     }
-                )
-            # LIST, TUPLE, etc.
-            elif isinstance(elem, Sequence):
-                device_batch.append(
-                    [
-                        v.to(self.exp_manager.device)
-                        if torch.is_tensor(v)
-                        else v
-                        for v in elem
+                elif isinstance(v, Sequence):
+                    device_batch[k] = [
+                        v2.to(self.exp_manager.device)
+                        if torch.is_tensor(v2)
+                        else v2
+                        for v2 in v
                     ]
-                )
-            # OTHER (like strings)
-            else:
-                device_batch.append(elem)
+                else:
+                    device_batch[k] = v
 
         return device_batch
 
     @abstractmethod
-    def input_batch_kwargs(self, batch: Sequence[Any]) -> Dict[str, Any]:
+    def input_batch_kwargs(
+        self, batch: Sequence[Any] | Mapping[str, Any]
+    ) -> Dict[str, Any]:
         """Creates a kwargs dict from batch for the model."""
 
-    def batch_labels(self, batch: Sequence[Any]):
+    def batch_labels(self, batch: Sequence[Any] | Mapping[str, Any]):
         """Grabs labels from batch."""
         return batch[-1]
 
-    def batch_ids(self, batch: Sequence[Any]):
+    def batch_ids(self, batch: Sequence[Any] | Mapping[str, Any]):
         """Returns some identifier for the examples of the batch."""
 
     def get_logits_from_model(
@@ -635,7 +669,9 @@ class BaseTrainer(ABC):
                         )
 
                         early_stop = self.early_stopping.step(
-                            results.get(self.early_stopping_metric, None),
+                            results.get(
+                                self.exp_manager.early_stopping_metric, None
+                            ),
                             **{**results, "epoch": epoch + 1, "step": step + 1},
                         )
                         if early_stop:
@@ -648,14 +684,14 @@ class BaseTrainer(ABC):
         early_stopping_metrics = self.early_stopping.get_metrics()
         if early_stopping_metrics is not None:
             self.logger.info(
-                f"Best metrics based on {self.early_stopping_metric} "
+                f"Best metrics based on {self.exp_manager.early_stopping_metric} "
                 f"on {self.eval_dataset_names}: "
                 + result_str(early_stopping_metrics)
             )
             # check if steps need to be added here
             self.exp_manager.set_best(
                 "early_stopping",
-                metric=self.early_stopping_metric,
+                metric=self.exp_manager.early_stopping_metric,
                 higher_better=not self.exp_manager.lower_better,
             )
 
