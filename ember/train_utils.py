@@ -4,8 +4,10 @@ from typing import Optional, Any, Dict, Union
 
 import torch
 
+from ember.utils import LoggingMixin
 
-class EarlyStopping:
+
+class EarlyStopping(LoggingMixin):
     """Implements early stopping in a Pytorch fashion, i.e. an init call
     where the model (you want to save) is an argument and a step function
     to be called after each evaluation.
@@ -22,7 +24,6 @@ class EarlyStopping:
         best_<metric name>: other corresponding measurements can be passed
             as extra kwargs, they are stored when the main metric is stored
             by prepending 'best_' to the name.
-        logger: logging module.
     """
 
     @staticmethod
@@ -56,7 +57,8 @@ class EarlyStopping:
         save_model: bool = False,
         delta: float = 0,
         lower_better: bool = False,
-        logging_level: Optional[int] = None,
+        *args,
+        **kwargs,
     ):
         """Init.
 
@@ -68,6 +70,9 @@ class EarlyStopping:
                 the previous best one.
             lower_better: whether a lower metric is better.
         """
+
+        super().__init__(*args, **kwargs)
+
         self.model = model
         self.tmp_fn = (
             tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
@@ -81,11 +86,6 @@ class EarlyStopping:
         self.higher_better = not lower_better
 
         self.best = None
-
-        self.logger = logging.getLogger(__name__)
-        if not logging_level:
-            logging_level = logging.WARNING
-        self.logger.setLevel(logging_level)
 
     def new_best(self, metric: float) -> bool:
         """Compares the `metric` appropriately to the current best.
@@ -129,16 +129,17 @@ class EarlyStopping:
             return False  # no early stopping, so user gets signal to continue
 
         if self.new_best(metric):
-            self.logger.info(
-                f"Metric improved: {self.best_str()} -> {metric:.6f}"
+            self.log(
+                f"Metric improved: {self.best_str()} -> {metric:.6f}", "info"
             )
             self._store_best(metric, **kwargs)
             self.cnt = 0
             self._save()
         else:
             self.cnt += 1
-            self.logger.info(
-                f"Patience counter increased to {self.cnt}/{self.patience}"
+            self.log(
+                f"Patience counter increased to {self.cnt}/{self.patience}",
+                "info",
             )
 
         return self.cnt >= self.patience
@@ -149,7 +150,7 @@ class EarlyStopping:
             self.saved = True
             torch.save(self.model.state_dict(), self.tmp_fn.name)
             self.tmp_fn.seek(0)
-            self.logger.info("Saved model to " + self.tmp_fn.name)
+            self.log("Saved model to " + self.tmp_fn.name, "info")
 
     def best_model(self) -> torch.nn.Module:
         """Loads last checkpoint (if any) and returns model."""
