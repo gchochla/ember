@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 from torch.utils.data import Dataset, IterableDataset
 
+from ember.utils import LoggingMixin
+
 
 def _parse_namespace(func):
     def wrapper(*args, **kwargs):
@@ -16,7 +18,7 @@ def _parse_namespace(func):
     return wrapper
 
 
-class BaseDataset(Dataset, ABC):
+class BaseDataset(LoggingMixin, Dataset, ABC):
     @_parse_namespace
     def __new__(cls, *args, **kwargs):
         """If argument "splits" (if not provided as kwarg,
@@ -40,7 +42,7 @@ class BaseDataset(Dataset, ABC):
         return self.__class__.__name__
 
 
-class BaseIterableDataset(IterableDataset):
+class BaseIterableDataset(LoggingMixin, IterableDataset, ABC):
     @_parse_namespace
     def __new__(cls, *args, **kwargs):
         """If argument "splits" (if not provided as kwarg,

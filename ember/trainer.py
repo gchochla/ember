@@ -16,6 +16,8 @@ from ember.utils import flatten_list
 from ember.train_utils import EarlyStopping
 from legm import ExperimentManager
 
+from ember.utils import LoggingMixin
+
 
 def result_str(results: Dict[str, float]):
     return ", ".join(
@@ -28,7 +30,7 @@ def result_str(results: Dict[str, float]):
     )
 
 
-class BaseTrainer(ABC):
+class BaseTrainer(LoggingMixin, ABC):
     """Base trainer class.
 
     Attributes:
@@ -187,13 +189,11 @@ class BaseTrainer(ABC):
 
         self.verbose = not self.exp_manager.disable_tqdm
 
-        self.logger = logging.getLogger(__name__)
-        if not logging_level:
-            logging_level = logging.WARNING
-        self.logger.setLevel(logging_level)
-
-        if self.verbose:
-            self.logger.debug(f"Trainer set up.")
+        self.create_logger(
+            self.exp_manager.logging_file,
+            self.exp_manager.logging_level,
+            __name__,
+        )
 
         self.set_num_steps = (
             self.exp_manager.num_train_epochs is not None
@@ -204,6 +204,8 @@ class BaseTrainer(ABC):
             self.set_num_steps
             or (self.early_stopping.patience is not None and self.do_eval)
         )
+
+        self.log(f"Trainer set up.", "debug")
 
     def train_init(self):
         """Used when training starts."""
@@ -241,7 +243,7 @@ class BaseTrainer(ABC):
             model_fn = self.exp_manager.model_save_filename
             torch.save(self.model.cpu().state_dict(), model_fn)
             self.model.to(self.exp_manager.device)
-            self.logger.info(f"Saved model to {model_fn}")
+            self.log(f"Saved model to {model_fn}", "info")
 
     def train_end(self):
         """Used when training (and evaluation) ends."""
@@ -588,7 +590,7 @@ class BaseTrainer(ABC):
                         and step >= self.exp_manager.max_steps
                     )
                     if early_stop:
-                        self.logger.info("Forcibly stopping training")
+                        self.log("Forcibly stopping training", "info")
                         break
 
                     if step % self.exp_manager.eval_steps == 0:
@@ -661,11 +663,12 @@ class BaseTrainer(ABC):
                             results, step=n_samples
                         )
 
-                        self.logger.info(
+                        self.log(
                             f"Step {step+1} (epoch {epoch+1}) metrics on "
                             + self.eval_dataset_names
                             + ": "
-                            + result_str(results)
+                            + result_str(results),
+                            "info",
                         )
 
                         early_stop = self.early_stopping.step(
@@ -675,18 +678,20 @@ class BaseTrainer(ABC):
                             **{**results, "epoch": epoch + 1, "step": step + 1},
                         )
                         if early_stop:
-                            self.logger.info(
+                            self.log(
                                 "Early stopping at step "
-                                f"{step + 1} (epoch {epoch+1})"
+                                f"{step + 1} (epoch {epoch+1})",
+                                "info",
                             )
                             break
 
         early_stopping_metrics = self.early_stopping.get_metrics()
         if early_stopping_metrics is not None:
-            self.logger.info(
+            self.log(
                 f"Best metrics based on {self.exp_manager.early_stopping_metric} "
                 f"on {self.eval_dataset_names}: "
-                + result_str(early_stopping_metrics)
+                + result_str(early_stopping_metrics),
+                "info",
             )
             # check if steps need to be added here
             self.exp_manager.set_best(
@@ -697,9 +702,10 @@ class BaseTrainer(ABC):
 
         if self.do_test:
             results = self.evaluate(test_data_loader, "Testing")
-            self.logger.info(
+            self.log(
                 f"Testing metrics for {self.test_dataset_names}: "
-                + result_str(results)
+                + result_str(results),
+                "info",
             )
             # check if steps need to be added here
             self.exp_manager.set_dict_metrics(results, test=True)
