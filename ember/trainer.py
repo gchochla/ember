@@ -170,6 +170,7 @@ class BaseTrainer(LoggingMixin, ABC):
             else None
         )
         self.exp_manager = experiment_manager
+        self.exp_manager.start()
 
         if hasattr(self.exp_manager, "early_stopping_patience"):
             self.early_stopping = EarlyStopping(
@@ -531,7 +532,6 @@ class BaseTrainer(LoggingMixin, ABC):
 
         self.model = self.model.to(self.exp_manager.device)
         self.model.train()
-        self.exp_manager.start()
         self.train_init()
 
         kwargs = (
