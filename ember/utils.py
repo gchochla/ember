@@ -15,17 +15,29 @@ class LoggingMixin:
         _logging_mixin_data: dict for the logging mixin.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        logging_file: str | None = None,
+        logging_level: int | str | None = None,
+        logger_name: str = None,
+        *args,
+        **kwargs,
+    ):
+        """Initializes the logging mixin.
+
+        Args:
+            logger: logger to use. Priority over `logging_file`.
+            logging_file: logging file.
+            logging_level: logging level.
+            logger_name: name of the logger.
+        """
         self._logging_mixin_data = {}
 
-        if "logger" in kwargs:
-            self._logging_mixin_data["logger"] = kwargs["logger"]
-        elif "logging_file" in kwargs:
-            self.create_logger(
-                kwargs["logging_file"],
-                kwargs.get("logging_level", None),
-                kwargs.get("name", None),
-            )
+        if logger is not None:
+            self._logging_mixin_data["logger"] = logger
+        elif logging_file is not None:
+            self.create_logger(logging_file, logging_level, logger_name)
 
         super().__init__(*args, **kwargs)
 
