@@ -1,6 +1,5 @@
 import os
-import logging
-from typing import Optional, Union, Dict, List, Sequence, Any, Tuple, Mapping
+from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
 from time import time
 
@@ -19,7 +18,7 @@ from legm import ExperimentManager
 from ember.utils import LoggingMixin
 
 
-def result_str(results: Dict[str, float]):
+def result_str(results: dict[str, float]):
     return ", ".join(
         [
             f"{key}={value:.4f}"
@@ -132,10 +131,11 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         model: nn.Module,
         experiment_manager: ExperimentManager,
-        train_dataset: Optional[Dataset] = None,
-        dev_dataset: Optional[Dataset] = None,
-        test_dataset: Optional[Dataset] = None,
-        logging_level: Optional[Union[int, str]] = None,
+        train_dataset: Dataset | None = None,
+        dev_dataset: Dataset | None = None,
+        test_dataset: Dataset | None = None,
+        *args,
+        **kwargs,
     ):
         """Init.
 
@@ -145,8 +145,10 @@ class BaseTrainer(LoggingMixin, ABC):
             train_dataset: train dataset.
             dev_dataset: dev dataset.
             test_dataset: test dataset.
-            logging_level: level of severity of logger.
+            kwargs: logging related arguments.
         """
+
+        super().__init__(*args, **kwargs)
 
         self.model = model
         self.dataset = train_dataset
@@ -178,14 +180,14 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.exp_manager.early_stopping_patience,
                 self.exp_manager.model_save,
                 lower_better=self.exp_manager.lower_better,
-                logging_level=logging_level,
+                logger=self.get_logger(),
             )
         else:
             self.early_stopping = EarlyStopping(
                 self.model,
                 None,
                 self.exp_manager.model_save,
-                logging_level=logging_level,
+                logger=self.get_logger(),
             )
 
         self.verbose = not self.exp_manager.disable_tqdm
@@ -333,7 +335,7 @@ class BaseTrainer(LoggingMixin, ABC):
     @abstractmethod
     def input_batch_kwargs(
         self, batch: Sequence[Any] | Mapping[str, Any]
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Creates a kwargs dict from batch for the model."""
 
     def batch_labels(self, batch: Sequence[Any] | Mapping[str, Any]):
@@ -374,7 +376,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def get_intermediate_repr_from_model(
         self, return_vals: Any, batch: Sequence[Any]
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         """Grabs intermediate representations of the model from its output,
         if necessary for some regularization loss.
 
@@ -408,7 +410,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def calculate_regularization_loss(
         self,
-        intermediate_representations: Optional[torch.Tensor],
+        intermediate_representations: torch.Tensor | None,
         logits: torch.Tensor,
         batch: Sequence[Any],
         train: bool,
@@ -433,8 +435,8 @@ class BaseTrainer(LoggingMixin, ABC):
         logits: torch.Tensor,
         batch: Sequence[Any],
         train: bool,
-        intermediate_representations: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, float, float]:
+        intermediate_representations: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, float, float]:
         """Calculates loss based on predicted logits and labels.
 
         Args:
@@ -475,7 +477,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def init_optimizer_scheduler(
         self, num_batches: int
-    ) -> Tuple[
+    ) -> tuple[
         torch.optim.Optimizer, torch.optim.lr_scheduler.ChainedScheduler
     ]:
         """Initializes and returns optimizer (based on `init_optimizer`)
@@ -715,22 +717,22 @@ class BaseTrainer(LoggingMixin, ABC):
     def get_evals_from_dataset(
         self,
         data_loader: DataLoader,
-        tqdm_message: Optional[str] = "Evaluation",
-    ) -> Tuple[
-        List[List[int]],
-        List[List[float]],
-        List[List[int]],
-        List[Any],
+        tqdm_message: str | None = "Evaluation",
+    ) -> tuple[
+        list[list[int]],
+        list[list[float]],
+        list[list[int]],
+        list[Any],
         float,
         float,
     ]:
         """Evaluates the model on the given dataset.
 
         Returns:
-            eval_preds: List of predictions for each example.
-            eval_scores: List of scores for each example.
-            eval_true: List of true labels for each example.
-            eval_ids: List of ids for each example.
+            eval_preds: list of predictions for each example.
+            eval_scores: list of scores for each example.
+            eval_true: list of true labels for each example.
+            eval_ids: list of ids for each example.
             eval_loss: Loss on the dataset.
             eval_reg_loss: Regularization loss on the dataset.
         """
@@ -799,7 +801,7 @@ class BaseTrainer(LoggingMixin, ABC):
     def evaluate(
         self,
         data_loader: DataLoader,
-        tqdm_message: Optional[str] = "Evaluation",
+        tqdm_message: str | None = "Evaluation",
     ):
         """Evaluates model on `data_loader`.
 
@@ -840,28 +842,28 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def get_eval_preds_from_batch(
         self, logits: torch.Tensor
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """Returns predictions in batch based on logits."""
         return logits.argmax(-1).tolist()
 
     def get_eval_scores_from_batch(
         self, logits: torch.Tensor
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """Returns prediction scores in batch based on logits."""
         return logits.softmax(-1).tolist()
 
-    def get_eval_true_from_batch(self, labels: torch.Tensor) -> List[List[int]]:
+    def get_eval_true_from_batch(self, labels: torch.Tensor) -> list[list[int]]:
         """Returns list of ground-truth labels."""
         return labels.tolist()
 
     def evaluation_metrics(
         self,
-        eval_true: List[List[int]],
-        eval_preds: List[List[int]],
+        eval_true: list[list[int]],
+        eval_preds: list[list[int]],
         data_loader: DataLoader,
-        eval_ids: Optional[List[Any]] = None,
-        eval_pred_scores: Optional[List[List[float]]] = None,
-    ) -> Dict[str, float]:
+        eval_ids: list[Any] | None = None,
+        eval_pred_scores: list[list[float]] | None = None,
+    ) -> dict[str, float]:
         """Computes evaluation metrics (beyond evaluation loss).
 
         Args:

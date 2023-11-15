@@ -1,6 +1,5 @@
-import logging
 import tempfile
-from typing import Optional, Any, Dict, Union
+from typing import Any
 
 import torch
 
@@ -53,7 +52,7 @@ class EarlyStopping(LoggingMixin):
     def __init__(
         self,
         model: torch.nn.Module,
-        patience: Optional[int],
+        patience: int | None,
         save_model: bool = False,
         delta: float = 0,
         lower_better: bool = False,
@@ -110,7 +109,7 @@ class EarlyStopping(LoggingMixin):
             return "None"
         return f"{self.best:.6f}"
 
-    def step(self, metric: Optional[float], **kwargs) -> bool:
+    def step(self, metric: float | None, **kwargs) -> bool:
         """Compares new metric (if it is provided) with previous best,
         saves model if so (and if `model_path` was not `None`) and
         updates count of unsuccessful steps.
@@ -168,7 +167,7 @@ class EarlyStopping(LoggingMixin):
 
     def get_metrics(
         self,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Returns accumulated best metrics.
 
         Returns:
@@ -201,9 +200,7 @@ class SchedulerList:
 
     def __init__(
         self,
-        *schedulers: Union[
-            torch.optim.lr_scheduler._LRScheduler, "AnyScheduler"
-        ],
+        *schedulers: torch.optim.lr_scheduler._LRScheduler | "AnyScheduler",
     ):
         """
         Init.

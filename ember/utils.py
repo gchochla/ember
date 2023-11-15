@@ -1,5 +1,4 @@
 import logging
-from typing import List, Optional
 from copy import deepcopy
 
 import torch
@@ -75,6 +74,10 @@ class LoggingMixin:
 
         self._logging_mixin_data["logger"].addHandler(fh)
 
+    def get_logger(self) -> logging.Logger:
+        """Returns the logger."""
+        return self._logging_mixin_data["logger"]
+
     def log(self, message: str, level: int | str | None = None):
         """Logs a message.
 
@@ -103,7 +106,7 @@ def set_parameter_requires_grad(
         param.requires_grad_(requires_grad)
 
 
-def flatten_list(l: List, order: Optional[int] = None):
+def flatten_list(l: list, order: int | None = None):
     """Flattens a list up to `order-1` times.
 
     Args:
