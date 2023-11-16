@@ -190,12 +190,6 @@ class BaseTrainer(LoggingMixin, ABC):
 
         self.verbose = not self.exp_manager.disable_tqdm
 
-        self.create_logger(
-            self.exp_manager.logging_file,
-            self.exp_manager.logging_level,
-            __name__,
-        )
-
         self.set_num_steps = (
             self.exp_manager.num_train_epochs is not None
             or self.exp_manager.max_steps > -1
