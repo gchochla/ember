@@ -248,7 +248,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def train_end(self):
         """Used when training (and evaluation) ends."""
-        self.exp_manager.log()
+        self.exp_manager.log_metrics()
         self._save_best_model()
         self.exp_manager.aggregate_results()
         self.exp_manager.plot()
