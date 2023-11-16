@@ -32,7 +32,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     Attributes:
         model: the model to train.
-        dataset: train dataset.
+        train_dataset: train dataset.
         dev_dataset: dev dataset, if any.
         test_dataset: test dataset, if any.
         do_eval: whether dev dataset has been set.
@@ -149,7 +149,7 @@ class BaseTrainer(LoggingMixin, ABC):
         super().__init__(*args, **kwargs)
 
         self.model = model
-        self.dataset = train_dataset
+        self.train_dataset = train_dataset
         self.dev_dataset = dev_dataset
         self.test_dataset = test_dataset
         self.do_train = train_dataset is not None
@@ -530,13 +530,13 @@ class BaseTrainer(LoggingMixin, ABC):
 
         kwargs = (
             dict(shuffle=True)
-            if not isinstance(self.dataset, IterableDataset)
+            if not isinstance(self.train_dataset, IterableDataset)
             else dict()
         )
 
         if self.do_train:
             data_loader = self.init_dataloader(
-                self.dataset, train=True, **kwargs
+                self.train_dataset, train=True, **kwargs
             )
             self.optimizer, self.scheduler = self.init_optimizer_scheduler(
                 len(data_loader)
