@@ -74,9 +74,9 @@ class LoggingMixin:
 
         self._logging_mixin_data["logger"].addHandler(fh)
 
-    def get_logger(self) -> logging.Logger:
+    def get_logger(self) -> logging.Logger | None:
         """Returns the logger."""
-        return self._logging_mixin_data["logger"]
+        return self._logging_mixin_data.get("logger", None)
 
     def log(self, message: str, level: int | str | None = None):
         """Logs a message.

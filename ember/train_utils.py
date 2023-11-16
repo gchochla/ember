@@ -200,7 +200,8 @@ class SchedulerList:
 
     def __init__(
         self,
-        *schedulers: torch.optim.lr_scheduler._LRScheduler | "AnyScheduler",
+        *schedulers: torch.optim.lr_scheduler._LRScheduler
+        | type["AnyScheduler"],
     ):
         """
         Init.
