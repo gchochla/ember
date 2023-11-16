@@ -2,8 +2,7 @@ import tempfile
 from typing import Any
 
 import torch
-
-from ember.utils import LoggingMixin
+from legm import LoggingMixin
 
 
 class EarlyStopping(LoggingMixin):

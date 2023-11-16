@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 
 from torch.utils.data import Dataset, IterableDataset
-
-from ember.utils import LoggingMixin
+from legm import LoggingMixin
 
 
 def _parse_namespace(func):

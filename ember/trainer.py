@@ -13,9 +13,7 @@ from transformers.optimization import get_linear_schedule_with_warmup
 
 from ember.utils import flatten_list
 from ember.train_utils import EarlyStopping
-from legm import ExperimentManager
-
-from ember.utils import LoggingMixin
+from legm import ExperimentManager, LoggingMixin
 
 
 def result_str(results: dict[str, float]):
