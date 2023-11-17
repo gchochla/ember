@@ -386,6 +386,7 @@ class BaseTrainer(LoggingMixin, ABC):
         logits: torch.Tensor,
         labels: torch.Tensor,
         train: bool,
+        aggregate: bool = True,
     ) -> torch.Tensor:
         """Calculates train loss based on predicted logits and labels.
 
@@ -393,11 +394,12 @@ class BaseTrainer(LoggingMixin, ABC):
             logits: model predictions.
             labels: ground truth labels.
             train: whether this is during training.
+            aggregate: whether to aggregate loss across batch.
 
         Returns:
             Loss.
         """
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(reduction="mean" if aggregate else None)
         return criterion(logits, labels)
 
     def calculate_regularization_loss(
@@ -406,6 +408,7 @@ class BaseTrainer(LoggingMixin, ABC):
         logits: torch.Tensor,
         batch: Sequence[Any],
         train: bool,
+        aggregate: bool = True,
     ) -> torch.Tensor:
         """Calculates regularization loss based on some intermediate
         representation and the batch information (like labels).
@@ -416,6 +419,8 @@ class BaseTrainer(LoggingMixin, ABC):
             logits: model predictions.
             batch: the batch this representation came from.
             train: whether this is used during training.
+            aggregate: whether to aggregate loss across batch,
+                if possible.
 
         Returns:
             Regularization loss (or a dummy 0 tensor on the proper device).
@@ -428,7 +433,8 @@ class BaseTrainer(LoggingMixin, ABC):
         batch: Sequence[Any],
         train: bool,
         intermediate_representations: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, float, float]:
+        aggregate: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Calculates loss based on predicted logits and labels.
 
         Args:
@@ -441,14 +447,11 @@ class BaseTrainer(LoggingMixin, ABC):
             Loss, train loss and regularization loss.
         """
         train_loss = self.calculate_cls_loss(
-            logits, self.batch_labels(batch), train
+            logits, self.batch_labels(batch), train, aggregate
         )
 
         regularization_loss = self.calculate_regularization_loss(
-            intermediate_representations,
-            logits,
-            batch,
-            train,
+            intermediate_representations, logits, batch, train, aggregate
         )
 
         return (
@@ -645,17 +648,19 @@ class BaseTrainer(LoggingMixin, ABC):
                             / step_samples,
                         )
 
-                        if self.do_eval:
-                            results.update(
-                                self.evaluate(
-                                    dev_data_loader,
-                                    f"Evaluating after {step+1} steps (epoch {epoch+1})",
-                                )
-                            )
-
                         self.exp_manager.set_dict_metrics(
                             results, step=n_samples
                         )
+
+                        if self.do_eval:
+                            aggr_results, per_example_results = self.evaluate(
+                                dev_data_loader,
+                                f"Evaluating after {step+1} steps (epoch {epoch+1})",
+                            )
+                            self.exp_manager.set_dict_metrics(
+                                {**aggr_results, **per_example_results},
+                                step=n_samples,
+                            )
 
                         self.log(
                             f"Step {step+1} (epoch {epoch+1}) metrics on "
@@ -695,14 +700,18 @@ class BaseTrainer(LoggingMixin, ABC):
             )
 
         if self.do_test:
-            results = self.evaluate(test_data_loader, "Testing")
+            results, per_example_results = self.evaluate(
+                test_data_loader, "Testing"
+            )
             self.log(
                 f"Testing metrics for {self.test_dataset_names}: "
                 + result_str(results),
                 "info",
             )
             # check if steps need to be added here
-            self.exp_manager.set_dict_metrics(results, test=True)
+            self.exp_manager.set_dict_metrics(
+                {**results, **per_example_results}, test=True
+            )
 
         self.train_end()
 
@@ -715,6 +724,8 @@ class BaseTrainer(LoggingMixin, ABC):
         list[list[float]],
         list[list[int]],
         list[Any],
+        list[float],
+        list[float],
         float,
         float,
     ]:
@@ -725,6 +736,8 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores: list of scores for each example.
             eval_true: list of true labels for each example.
             eval_ids: list of ids for each example.
+            eval_losses: list of losses for each example.
+            eval_reg_losses: list of regularization losses for each example.
             eval_loss: Loss on the dataset.
             eval_reg_loss: Regularization loss on the dataset.
         """
@@ -739,6 +752,8 @@ class BaseTrainer(LoggingMixin, ABC):
         eval_preds = []
         eval_scores = []
         eval_true = []
+        eval_losses = []
+        eval_reg_losses = []
         eval_ids = []
         eval_loss = 0.0
         eval_reg_loss = 0.0
@@ -759,10 +774,14 @@ class BaseTrainer(LoggingMixin, ABC):
                 batch,
                 train=False,
                 intermediate_representations=inter_reprs,
+                aggregate=False,
             )
 
-            eval_loss += cls_loss.item() * self.batch_len(batch)
-            eval_reg_loss += reg_loss.item() * self.batch_len(batch)
+            eval_loss += cls_loss.sum()
+            eval_reg_loss += reg_loss.sum()
+
+            eval_losses.extend(cls_loss.tolist())
+            eval_reg_losses.extend(reg_loss.tolist())
 
             eval_preds.extend(self.get_eval_preds_from_batch(logits))
             eval_true.extend(
@@ -786,6 +805,8 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores,
             eval_true,
             eval_ids,
+            eval_losses,
+            eval_reg_losses,
             eval_loss,
             eval_reg_loss,
         )
@@ -794,7 +815,7 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
-    ):
+    ) -> tuple[dict[str, float]]:
         """Evaluates model on `data_loader`.
 
         Args:
@@ -810,6 +831,8 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores,
             eval_true,
             eval_ids,
+            eval_losses,
+            eval_reg_losses,
             eval_loss,
             eval_reg_loss,
         ) = self.get_evals_from_dataset(data_loader, tqdm_message)
@@ -830,7 +853,25 @@ class BaseTrainer(LoggingMixin, ABC):
         self.model.train()
         self.eval_end(data_loader)
 
-        return results
+        per_sample_results = {
+            _id: dict(
+                pred=pred,
+                true=true,
+                score=score,
+                loss=loss,
+                reg_loss=reg_loss,
+            )
+            for _id, pred, true, score, loss, reg_loss in zip(
+                eval_ids,
+                eval_preds,
+                eval_true,
+                eval_scores,
+                eval_losses,
+                eval_reg_losses,
+            )
+        }
+
+        return results, per_sample_results
 
     def get_eval_preds_from_batch(
         self, logits: torch.Tensor
