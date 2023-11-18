@@ -43,10 +43,14 @@ class BaseTrainer(LoggingMixin, ABC):
         scheduler: lr scheduler (defined in `train`)
     """
 
+    # these are expected in ExperimentManager,
+    # so they are not in the init signature
     @staticmethod
     def argparse_args():
+        """Arguments for argparse. For documentation, check
+        https://github.com/gchochla/legm/blob/main/docs/argparse.md"""
         args = dict(
-            model_save=dict(
+            save_model=dict(
                 action="store_true",
                 help="whether to save model",
                 metadata=dict(disable_comparison=True),
@@ -63,6 +67,12 @@ class BaseTrainer(LoggingMixin, ABC):
                     name=(lambda x: x),
                     name_transform=(lambda x: os.path.basename(x)),
                 ),
+            ),
+            model_save_filename=dict(
+                type=str,
+                help="local checkpoint to save "
+                "(symbolic link to ExperimentHandler saved params)",
+                metadata=dict(disable_comparison=True),
             ),
             discard_classifier=dict(
                 action="store_true",
@@ -176,7 +186,7 @@ class BaseTrainer(LoggingMixin, ABC):
             self.early_stopping = EarlyStopping(
                 self.model,
                 self.exp_manager.early_stopping_patience,
-                self.exp_manager.model_save,
+                self.exp_manager.save_model,
                 lower_better=self.exp_manager.lower_better,
                 logger=self.get_logger(),
             )
@@ -184,7 +194,7 @@ class BaseTrainer(LoggingMixin, ABC):
             self.early_stopping = EarlyStopping(
                 self.model,
                 None,
-                self.exp_manager.model_save,
+                self.exp_manager.save_model,
                 logger=self.get_logger(),
             )
 
@@ -234,9 +244,10 @@ class BaseTrainer(LoggingMixin, ABC):
         """Loads best model to `model` attribute
         and saves to experiment folder."""
         self.model = self.early_stopping.best_model()
-        if self.exp_manager.model_save:
-            model_fn = self.exp_manager.model_save_filename
+        if self.exp_manager.save_model:
+            model_fn = self.exp_manager.get_save_filename()
             torch.save(self.model.cpu().state_dict(), model_fn)
+            os.symlink(model_fn, self.exp_manager.model_save_filename)
             self.model.to(self.exp_manager.device)
             self.log(f"Saved model to {model_fn}", "info")
 
