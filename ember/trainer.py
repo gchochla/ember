@@ -669,7 +669,7 @@ class BaseTrainer(LoggingMixin, ABC):
                                 f"Evaluating after {step+1} steps (epoch {epoch+1})",
                             )
                             self.exp_manager.set_dict_metrics(
-                                {**aggr_results, **per_example_results},
+                                {**aggr_results, **(per_example_results or {})},
                                 step=n_samples,
                             )
 
@@ -721,7 +721,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             # check if steps need to be added here
             self.exp_manager.set_dict_metrics(
-                {**results, **per_example_results}, test=True
+                {**results, **(per_example_results or {})}, test=True
             )
 
         self.train_end()
@@ -864,23 +864,26 @@ class BaseTrainer(LoggingMixin, ABC):
         self.model.train()
         self.eval_end(data_loader)
 
-        per_sample_results = {
-            _id: dict(
-                pred=pred,
-                true=true,
-                score=score,
-                loss=loss,
-                reg_loss=reg_loss,
-            )
-            for _id, pred, true, score, loss, reg_loss in zip(
-                eval_ids,
-                eval_preds,
-                eval_true,
-                eval_scores,
-                eval_losses,
-                eval_reg_losses,
-            )
-        }
+        per_sample_results = None
+
+        if eval_ids is not None:
+            per_sample_results = {
+                _id: dict(
+                    pred=pred,
+                    true=true,
+                    score=score,
+                    loss=loss,
+                    reg_loss=reg_loss,
+                )
+                for _id, pred, true, score, loss, reg_loss in zip(
+                    eval_ids,
+                    eval_preds or [None] * len(eval_ids),
+                    eval_true or [None] * len(eval_ids),
+                    eval_scores or [None] * len(eval_ids),
+                    eval_losses or [None] * len(eval_ids),
+                    eval_reg_losses or [None] * len(eval_ids),
+                )
+            }
 
         return results, per_sample_results
 
