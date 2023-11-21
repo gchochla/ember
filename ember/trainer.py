@@ -32,9 +32,13 @@ class BaseTrainer(LoggingMixin, ABC):
 
     Attributes:
         model: the model to train.
-        train_dataset: train dataset.
+        train_dataset: train dataset, if any.
         dev_dataset: dev dataset, if any.
         test_dataset: test dataset, if any.
+        any_dataset: contains the first dataset that is provided.
+            To be used when an attribute constant across splits
+            needs to be accessed.
+        do_train: whether train dataset has been set.
         do_eval: whether dev dataset has been set.
         do_test: whether test dataset has been set.
         args: training arguments (from `transformers`).
@@ -178,6 +182,9 @@ class BaseTrainer(LoggingMixin, ABC):
             else test_dataset.name
             if self.do_test
             else None
+        )
+        self.any_dataset = (
+            self.train_dataset or self.dev_dataset or self.test_dataset
         )
         self.exp_manager = experiment_manager
         self.exp_manager.start()
