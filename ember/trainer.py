@@ -799,8 +799,8 @@ class BaseTrainer(LoggingMixin, ABC):
                 aggregate=False,
             )
 
-            eval_loss += cls_loss.sum()
-            eval_reg_loss += reg_loss.sum()
+            eval_loss += cls_loss.sum().item()
+            eval_reg_loss += reg_loss.sum().item()
 
             eval_losses.extend(cls_loss.tolist())
             eval_reg_losses.extend(reg_loss.tolist())
