@@ -399,6 +399,16 @@ class BaseTrainer(LoggingMixin, ABC):
                 regularization losses, if necessary.
         """
 
+    def get_log_outputs_from_model(self, return_vals: Any) -> list[Any]:
+        """Grabs outputs of the model for logging purposes.
+
+        Args:
+            return_vals: return values from the model's forward function.
+
+        Returns:
+            Some outputs of the model for logging purposes.
+        """
+
     def calculate_cls_loss(
         self,
         logits: torch.Tensor,
@@ -746,6 +756,7 @@ class BaseTrainer(LoggingMixin, ABC):
         list[list[float]],
         list[list[int]],
         list[Any],
+        list[Any],
         list[float],
         list[float],
         float,
@@ -758,6 +769,7 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores: list of scores for each example.
             eval_true: list of true labels for each example.
             eval_ids: list of ids for each example.
+            eval_outs: list of model outputs for each example.
             eval_losses: list of losses for each example.
             eval_reg_losses: list of regularization losses for each example.
             eval_loss: Loss on the dataset.
@@ -777,6 +789,7 @@ class BaseTrainer(LoggingMixin, ABC):
         eval_losses = []
         eval_reg_losses = []
         eval_ids = []
+        eval_outs = []
         eval_loss = 0.0
         eval_reg_loss = 0.0
 
@@ -790,6 +803,7 @@ class BaseTrainer(LoggingMixin, ABC):
             inter_reprs = self.get_intermediate_repr_from_model(
                 return_vals, batch
             )
+            outs = self.get_log_outputs_from_model(return_vals)
 
             _, cls_loss, reg_loss = self.calculate_loss(
                 logits,
@@ -814,6 +828,9 @@ class BaseTrainer(LoggingMixin, ABC):
             if scores:
                 eval_scores.extend(scores)
 
+            if outs:
+                eval_outs.extend(outs)
+
             ids = self.batch_ids(batch)
             if ids:
                 eval_ids.extend(ids)
@@ -827,6 +844,7 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores,
             eval_true,
             eval_ids,
+            eval_outs,
             eval_losses,
             eval_reg_losses,
             eval_loss,
@@ -853,6 +871,7 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_scores,
             eval_true,
             eval_ids,
+            eval_outs,
             eval_losses,
             eval_reg_losses,
             eval_loss,
@@ -883,14 +902,16 @@ class BaseTrainer(LoggingMixin, ABC):
                     pred=pred,
                     true=true,
                     score=score,
+                    out=out,
                     loss=loss,
                     reg_loss=reg_loss,
                 )
-                for _id, pred, true, score, loss, reg_loss in zip(
+                for _id, pred, true, score, out, loss, reg_loss in zip(
                     eval_ids,
                     eval_preds or [None] * len(eval_ids),
                     eval_true or [None] * len(eval_ids),
                     eval_scores or [None] * len(eval_ids),
+                    eval_outs or [None] * len(eval_ids),
                     eval_losses or [None] * len(eval_ids),
                     eval_reg_losses or [None] * len(eval_ids),
                 )
