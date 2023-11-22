@@ -443,7 +443,11 @@ class BaseTrainer(LoggingMixin, ABC):
         Returns:
             Regularization loss (or a dummy 0 tensor on the proper device).
         """
-        return torch.tensor(0.0, device=self.exp_manager.device)
+        if aggregate:
+            return torch.tensor(0.0, device=self.exp_manager.device)
+        return torch.zeros(
+            len(self.batch_labels(batch)), device=self.exp_manager.device
+        )
 
     def calculate_loss(
         self,
