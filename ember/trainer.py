@@ -685,12 +685,12 @@ class BaseTrainer(LoggingMixin, ABC):
                         )
 
                         if self.do_eval:
-                            aggr_results, per_example_results = self.evaluate(
+                            aggr_results, sample_info = self.evaluate(
                                 dev_data_loader,
                                 f"Evaluating after {step+1} steps (epoch {epoch+1})",
                             )
                             self.exp_manager.set_dict_metrics(
-                                {**aggr_results, **(per_example_results or {})},
+                                {**aggr_results, **(sample_info or {})},
                                 step=n_samples,
                             )
 
@@ -732,9 +732,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
 
         if self.do_test:
-            results, per_example_results = self.evaluate(
-                test_data_loader, "Testing"
-            )
+            results, sample_info = self.evaluate(test_data_loader, "Testing")
             self.log(
                 f"Testing metrics for {self.test_dataset_names}: "
                 + result_str(results),
@@ -742,7 +740,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             # check if steps need to be added here
             self.exp_manager.set_dict_metrics(
-                {**results, **(per_example_results or {})}, test=True
+                {**results, **(sample_info or {})}, test=True
             )
 
         self.train_end()
@@ -882,11 +880,13 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_loss=eval_loss, eval_regularization_loss=eval_reg_loss
         )
         others = self.evaluation_metrics(
+            eval_ids,
             eval_true,
             eval_preds,
+            eval_scores,
+            eval_losses,
+            eval_reg_losses,
             data_loader=data_loader,
-            eval_ids=eval_ids,
-            eval_pred_scores=eval_scores,
         )
         if others:
             results.update(others)
@@ -894,10 +894,10 @@ class BaseTrainer(LoggingMixin, ABC):
         self.model.train()
         self.eval_end(data_loader)
 
-        per_sample_results = None
+        sample_info = None
 
         if eval_ids is not None:
-            per_sample_results = {
+            sample_info = {
                 _id: dict(
                     pred=pred,
                     true=true,
@@ -917,7 +917,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 )
             }
 
-        return results, per_sample_results
+        return results, sample_info
 
     def get_eval_preds_from_batch(
         self, logits: torch.Tensor
@@ -937,20 +937,24 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def evaluation_metrics(
         self,
+        eval_ids: list[Any],
         eval_true: list[list[int]],
         eval_preds: list[list[int]],
-        data_loader: DataLoader,
-        eval_ids: list[Any] | None = None,
-        eval_pred_scores: list[list[float]] | None = None,
+        eval_scores: list[list[float]],
+        eval_losses: list[float],
+        eval_reg_losses: list[float],
+        data_loader: DataLoader | None = None,
     ) -> dict[str, float]:
         """Computes evaluation metrics (beyond evaluation loss).
 
         Args:
+            eval_ids: IDs of examples (used for example to group)
             eval_true: ground-truth labels.
             eval_preds: predictions.
+            eval_scores: prediction scores.
+            eval_losses: losses.
+            eval_reg_losses: regularization losses.
             data_loader: DataLoader where data came from.
-            eval_ids: IDs of examples (used for example to group)
-            eval_pred_scores: scores (probabilities) of predictions.
 
         Returns:
             A dict of metrics.
