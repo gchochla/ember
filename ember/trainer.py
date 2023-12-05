@@ -70,6 +70,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 metadata=dict(
                     name=(lambda x: x),
                     name_transform=(lambda x: os.path.basename(x)),
+                    searchable=True,
                 ),
             ),
             model_save_filename=dict(
@@ -94,18 +95,27 @@ class BaseTrainer(LoggingMixin, ABC):
                 help="which device to use",
                 metadata=dict(disable_comparison=True),
             ),
-            lr=dict(default=2e-5, type=float, help="learning rate"),
-            adam_beta1=dict(default=0.9, type=float, help="Adam's beta_1"),
-            adam_beta2=dict(default=0.999, type=float, help="Adam's beta_2"),
-            adam_epsilon=dict(default=1e-8, type=float, help="Adam's epsilon"),
+            lr=dict(
+                default=2e-5, type=float, help="learning rate", searchable=True
+            ),
+            adam_beta1=dict(
+                default=0.9, type=float, help="Adam's beta_1", searchable=True
+            ),
+            adam_beta2=dict(
+                default=0.999, type=float, help="Adam's beta_2", searchable=True
+            ),
+            adam_epsilon=dict(
+                default=1e-8, type=float, help="Adam's epsilon", searchable=True
+            ),
             weight_decay=dict(
                 default=0,
                 type=float,
                 help="weight decay to apply (if not zero) to all layers "
                 "except all bias and LayerNorm weights in AdamW optimizer.",
+                searchable=True,
             ),
             train_batch_size=dict(
-                default=32, type=int, help="train batch size"
+                default=32, type=int, help="train batch size", searchable=True
             ),
             eval_batch_size=dict(
                 default=32,
@@ -124,12 +134,15 @@ class BaseTrainer(LoggingMixin, ABC):
                 help="per how many steps to evaluate on dev, default is epoch",
             ),
             max_steps=dict(default=-1, type=int, help="max number of steps"),
-            num_train_epochs=dict(type=int, help="number of training epochs"),
+            num_train_epochs=dict(
+                type=int, help="number of training epochs", searchable=True
+            ),
             warmup_ratio=dict(
                 default=0.1,
                 type=float,
                 help="ratio of training steps (not epochs)"
                 " to warmup lr before linear decay",
+                searchable=True,
             ),
         )
 
