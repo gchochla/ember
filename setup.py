@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ember",
-    version="1.0.21",
+    version="1.0.22",
     description="Basic utils and base classes for training and evaluating models in PyTorch",
     author="Georgios Chochlakis",
     author_email="chochlak@usc.edu",

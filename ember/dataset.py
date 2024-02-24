@@ -11,7 +11,9 @@ def _parse_namespace(func):
             if not hasattr(ns, "__len__"):
                 ns = [ns]
             for n in ns:
-                kwargs.update({k: getattr(n, k) for k in dir(n)})
+                kwargs.update(
+                    {k: getattr(n, k) for k in dir(n) if k not in kwargs}
+                )
         return func(*args, **kwargs)
 
     return wrapper
