@@ -19,9 +19,11 @@ from legm import ExperimentManager, LoggingMixin
 def result_str(results: dict[str, float]):
     return ", ".join(
         [
-            f"{key}={value:.4f}"
-            if isinstance(value, float)
-            else f"{key}={value}"
+            (
+                f"{key}={value:.4f}"
+                if isinstance(value, float)
+                else f"{key}={value}"
+            )
             for key, value in results.items()
         ]
     )
@@ -192,9 +194,7 @@ class BaseTrainer(LoggingMixin, ABC):
             train_dataset.name
             + ((" -> " + test_dataset.name) if self.do_test else "")
             if self.do_train
-            else test_dataset.name
-            if self.do_test
-            else None
+            else test_dataset.name if self.do_test else None
         )
         self.any_dataset = (
             self.train_dataset or self.dev_dataset or self.test_dataset
@@ -319,9 +319,11 @@ class BaseTrainer(LoggingMixin, ABC):
                 elif isinstance(elem, Sequence):
                     device_batch.append(
                         [
-                            v.to(self.exp_manager.device)
-                            if torch.is_tensor(v)
-                            else v
+                            (
+                                v.to(self.exp_manager.device)
+                                if torch.is_tensor(v)
+                                else v
+                            )
                             for v in elem
                         ]
                     )
@@ -345,9 +347,11 @@ class BaseTrainer(LoggingMixin, ABC):
                     }
                 elif isinstance(v, Sequence):
                     device_batch[k] = [
-                        v2.to(self.exp_manager.device)
-                        if torch.is_tensor(v2)
-                        else v2
+                        (
+                            v2.to(self.exp_manager.device)
+                            if torch.is_tensor(v2)
+                            else v2
+                        )
                         for v2 in v
                     ]
                 else:
@@ -440,7 +444,9 @@ class BaseTrainer(LoggingMixin, ABC):
         Returns:
             Loss.
         """
-        criterion = nn.CrossEntropyLoss(reduction="mean" if aggregate else None)
+        criterion = nn.CrossEntropyLoss(
+            reduction="mean" if aggregate else "none"
+        )
         return criterion(logits, labels)
 
     def calculate_regularization_loss(
