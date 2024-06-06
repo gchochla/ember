@@ -1,7 +1,8 @@
 import os
-from typing import Sequence, Any, Mapping
+from typing import Sequence, Any, Mapping, Iterable
 from abc import ABC, abstractmethod
 from time import time
+import warnings
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset
 from sklearn.metrics import precision_recall_fscore_support
 from tqdm import tqdm
 from transformers.optimization import get_linear_schedule_with_warmup
+from sklearn.metrics import accuracy_score
 
 from ember.utils import flatten_list
 from ember.train_utils import EarlyStopping
@@ -120,7 +122,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 default=32, type=int, help="train batch size", searchable=True
             ),
             eval_batch_size=dict(
-                default=32,
+                default="args.train_batch_size",  # NOTE: this only works with gridparse
                 type=int,
                 help="eval batch size",
                 metadata=dict(disable_comparison=True),
@@ -183,18 +185,21 @@ class BaseTrainer(LoggingMixin, ABC):
         self.test_dataset = test_dataset
         self.do_train = train_dataset is not None
         self.do_eval = dev_dataset is not None
+
+        train_name = getattr(train_dataset, "name", "Train")
+        dev_name = getattr(dev_dataset, "name", "Dev")
+        test_name = getattr(test_dataset, "name", "Test")
+
         self.eval_dataset_names = (
-            train_dataset.name
-            + ((" -> " + dev_dataset.name) if self.do_eval else "")
+            train_name + ((" -> " + dev_name) if self.do_eval else "")
             if self.do_train
             else None
         )
         self.do_test = test_dataset is not None
         self.test_dataset_names = (
-            train_dataset.name
-            + ((" -> " + test_dataset.name) if self.do_test else "")
+            train_name + ((" -> " + test_name) if self.do_test else "")
             if self.do_train
-            else test_dataset.name if self.do_test else None
+            else test_name if self.do_test else None
         )
         self.any_dataset = (
             self.train_dataset or self.dev_dataset or self.test_dataset
@@ -207,7 +212,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.model,
                 self.exp_manager.early_stopping_patience,
                 self.exp_manager.save_model,
-                lower_better=self.exp_manager.lower_better,
+                lower_better=self.exp_manager.early_stopping_lower_better,
                 logger=self.get_logger(),
             )
         else:
@@ -217,6 +222,11 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.exp_manager.save_model,
                 logger=self.get_logger(),
             )
+
+        if self.exp_manager.eval_steps is None and self.do_train:
+            self.exp_manager.eval_steps = (
+                len(train_dataset) + self.exp_manager.train_batch_size - 1
+            ) // self.exp_manager.train_batch_size
 
         self.verbose = not self.exp_manager.disable_tqdm
 
@@ -360,10 +370,26 @@ class BaseTrainer(LoggingMixin, ABC):
         return device_batch
 
     @abstractmethod
-    def input_batch_kwargs(
+    def input_batch_args(
         self, batch: Sequence[Any] | Mapping[str, Any]
-    ) -> dict[str, Any]:
-        """Creates a kwargs dict from batch for the model."""
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Creates args and kwargs dicts from batch for the model."""
+
+    def _get_return_vals_from_model(self, batch):
+        """Gets return values from the model."""
+        try:
+            args, kwargs = self.input_batch_args(batch)
+        except:
+            args = self.input_batch_args(batch)
+            if isinstance(args, Mapping):
+                kwargs, args = args, ()
+            else:
+                kwargs = {}
+
+        if not isinstance(args, (list, tuple)):
+            args = (args,)
+
+        return self.model(*args, **kwargs)
 
     def batch_labels(self, batch: Sequence[Any] | Mapping[str, Any]):
         """Grabs labels from batch."""
@@ -575,8 +601,18 @@ class BaseTrainer(LoggingMixin, ABC):
         )
 
     def train(self):
-        """Trains and, if a dev set or test set was provided, evaluates
-        the model."""
+        """Trains the model."""
+
+        warnings.warn(
+            "`train` is deprecated, use `run` instead.",
+            DeprecationWarning,
+        )
+
+        return self.run()
+
+    def run(self):
+        """(If train set was provided) trains and
+        (if a dev set or test set was provided) evaluates the model."""
 
         self.model = self.model.to(self.exp_manager.device)
         self.model.train()
@@ -655,7 +691,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
                     self.pre_step_actions(step)
 
-                    return_vals = self.model(**self.input_batch_kwargs(batch))
+                    return_vals = self._get_return_vals_from_model(batch)
                     logits = self.get_logits_from_model(
                         return_vals, batch, data_loader, epoch
                     )
@@ -814,7 +850,7 @@ class BaseTrainer(LoggingMixin, ABC):
             batch = self.batch_to_device(batch)
 
             with torch.no_grad():
-                return_vals = self.model(**self.input_batch_kwargs(batch))
+                return_vals = self._get_return_vals_from_model(batch)
 
             logits = self.get_logits_from_model(return_vals, batch, data_loader)
             inter_reprs = self.get_intermediate_repr_from_model(
@@ -957,9 +993,9 @@ class BaseTrainer(LoggingMixin, ABC):
     def evaluation_metrics(
         self,
         eval_ids: list[Any],
-        eval_true: list[list[int]],
-        eval_preds: list[list[int]],
-        eval_scores: list[list[float]],
+        eval_true: list[int],
+        eval_preds: list[int],
+        eval_scores: list[float],
         eval_losses: list[float],
         eval_reg_losses: list[float],
         data_loader: DataLoader | None = None,
@@ -979,22 +1015,11 @@ class BaseTrainer(LoggingMixin, ABC):
             A dict of metrics.
         """
         _, _, macro_f1_score, _ = precision_recall_fscore_support(
-            flatten_list(eval_true),
-            flatten_list(eval_preds),
-            average="macro",
-            zero_division=0,
-        )
-
-        eval_accuracy = np.mean(
-            [
-                pred == label
-                for preds, labels in zip(eval_preds, eval_true)
-                for pred, label in zip(preds, labels)
-            ]
+            eval_true, eval_preds, average="macro", zero_division=0
         )
 
         results = dict(
-            eval_accuracy=eval_accuracy,
+            eval_accuracy=accuracy_score(eval_true, eval_preds),
             macro_f1_score=macro_f1_score,
         )
 
