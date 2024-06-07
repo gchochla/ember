@@ -748,6 +748,7 @@ class BaseTrainer(LoggingMixin, ABC):
                                 {**aggr_results, **(sample_info or {})},
                                 step=n_samples,
                             )
+                            results.update(aggr_results)
 
                         self.log(
                             f"Step {step+1} (epoch {epoch+1}) metrics on "
