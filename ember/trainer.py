@@ -1,19 +1,17 @@
 import os
-from typing import Sequence, Any, Mapping, Iterable
+from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
 from time import time
 import warnings
 
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, IterableDataset
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 from tqdm import tqdm
 from transformers.optimization import get_linear_schedule_with_warmup
-from sklearn.metrics import accuracy_score
+from accelerate import Accelerator
 
-from ember.utils import flatten_list
 from ember.train_utils import EarlyStopping
 from legm import ExperimentManager, LoggingMixin
 
@@ -57,6 +55,10 @@ class BaseTrainer(LoggingMixin, ABC):
     def argparse_args():
         """Arguments for argparse. For documentation, check
         https://github.com/gchochla/legm/blob/main/docs/argparse.md"""
+
+        # NOTE: no LoggingMixin.argparse_args() because
+        # already in ExperimentManager.argparse_args()
+
         args = dict(
             save_model=dict(
                 action="store_true",
@@ -93,10 +95,9 @@ class BaseTrainer(LoggingMixin, ABC):
                 help="how classifier layers are names in Pytorch model,"
                 ' default is "classifier"',
             ),
-            device=dict(
-                default="cpu",
-                type=str,
-                help="which device to use",
+            accelerate=dict(
+                action="store_true",
+                help="whether to use accelerate for distributed training",
                 metadata=dict(disable_comparison=True),
             ),
             lr=dict(
@@ -148,6 +149,11 @@ class BaseTrainer(LoggingMixin, ABC):
                 " to warmup lr before linear decay",
                 searchable=True,
             ),
+            max_grad_norm=dict(
+                type=float,
+                help="maximum gradient norm for gradient clipping",
+                searchable=True,
+            ),
         )
 
         early_stopping = EarlyStopping.argparse_args()
@@ -177,7 +183,18 @@ class BaseTrainer(LoggingMixin, ABC):
             kwargs: logging related arguments.
         """
 
-        super().__init__(*args, **kwargs)
+        self.exp_manager = experiment_manager
+        self.exp_manager.start()
+
+        super().__init__(
+            *args,
+            **kwargs,
+            logging_file=self.exp_manager.logging_file,
+            logging_level=self.exp_manager.logging_level,
+        )
+
+        self.accelerator = Accelerator(cpu=not self.exp_manager.accelerate)
+        self.exp_manager.device = self.accelerator.device
 
         self.model = model
         self.train_dataset = train_dataset
@@ -204,8 +221,6 @@ class BaseTrainer(LoggingMixin, ABC):
         self.any_dataset = (
             self.train_dataset or self.dev_dataset or self.test_dataset
         )
-        self.exp_manager = experiment_manager
-        self.exp_manager.start()
 
         if hasattr(self.exp_manager, "early_stopping_patience"):
             self.early_stopping = EarlyStopping(
@@ -215,6 +230,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 lower_better=self.exp_manager.early_stopping_lower_better,
                 logger=self.get_logger(),
             )
+            print(self.early_stopping.get_logger())
         else:
             self.early_stopping = EarlyStopping(
                 self.model,
@@ -243,6 +259,13 @@ class BaseTrainer(LoggingMixin, ABC):
         self.log(f"Trainer set up.", "debug")
 
     def train_init(self):
+        warnings.warn(
+            "`train_init` is deprecated, use `run_init` instead.",
+            DeprecationWarning,
+        )
+        return self.run_init()
+
+    def run_init(self):
         """Used when training starts."""
         if self.exp_manager.model_load_filename is not None:
             loaded_state_dict = torch.load(self.exp_manager.model_load_filename)
@@ -270,18 +293,34 @@ class BaseTrainer(LoggingMixin, ABC):
 
             self.model.load_state_dict(loaded_state_dict)
 
+        self.model = self.accelerator.prepare(self.model)
+
     def _save_best_model(self):
         """Loads best model to `model` attribute
         and saves to experiment folder."""
+
         self.model = self.early_stopping.best_model()
         if self.exp_manager.save_model:
+            self.accelerator.wait_for_everyone()
+
             model_fn = self.exp_manager.get_save_filename()
-            torch.save(self.model.cpu().state_dict(), model_fn)
-            os.symlink(model_fn, self.exp_manager.model_save_filename)
+            torch.save(
+                self.accelerator.unwrap_model(self.model).cpu().state_dict(),
+                model_fn,
+            )
+            if self.exp_manager.model_save_filename:
+                os.symlink(model_fn, self.exp_manager.model_save_filename)
             self.model.to(self.exp_manager.device)
             self.log(f"Saved model to {model_fn}", "info")
 
     def train_end(self):
+        warnings.warn(
+            "`train_end` is deprecated, use `run_end` instead.",
+            DeprecationWarning,
+        )
+        return self.run_end()
+
+    def run_end(self):
         """Used when training (and evaluation) ends."""
         self.exp_manager.log_metrics()
         self._save_best_model()
@@ -578,7 +617,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 optimizer, lambda x: 1
             )
 
-        return optimizer, scheduler
+        return self.accelerator.prepare(optimizer, scheduler)
 
     def pre_step_actions(self, step):
         """Actions before update step."""
@@ -588,16 +627,18 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def init_dataloader(self, dataset: Dataset, train: bool, **kwargs):
         """Initializes and returns a DataLoader for the given dataset."""
-        return DataLoader(
-            dataset,
-            batch_size=(
-                self.exp_manager.train_batch_size
-                if train
-                else self.exp_manager.eval_batch_size
-            ),
-            collate_fn=getattr(dataset, "collate_fn", None),
-            num_workers=self.exp_manager.dataloader_num_workers,
-            **kwargs,
+        return self.accelerator.prepare(
+            DataLoader(
+                dataset,
+                batch_size=(
+                    self.exp_manager.train_batch_size
+                    if train
+                    else self.exp_manager.eval_batch_size
+                ),
+                collate_fn=getattr(dataset, "collate_fn", None),
+                num_workers=self.exp_manager.dataloader_num_workers,
+                **kwargs,
+            )
         )
 
     def train(self):
@@ -616,7 +657,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
         self.model = self.model.to(self.exp_manager.device)
         self.model.train()
-        self.train_init()
+        self.run_init()
 
         kwargs = (
             dict(shuffle=True)
@@ -687,7 +728,8 @@ class BaseTrainer(LoggingMixin, ABC):
 
                     # ACTUAL train loop
 
-                    batch = self.batch_to_device(batch)
+                    # now handled by accelerator
+                    # batch = self.batch_to_device(batch)
 
                     self.pre_step_actions(step)
 
@@ -707,7 +749,12 @@ class BaseTrainer(LoggingMixin, ABC):
                     )
 
                     self.optimizer.zero_grad()
-                    loss.backward()
+                    self.accelerator.backward(loss)
+                    if self.exp_manager.max_grad_norm is not None:
+                        self.accelerator.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.exp_manager.max_grad_norm,
+                        )
                     self.optimizer.step()
                     self.scheduler.step()
 
@@ -784,7 +831,7 @@ class BaseTrainer(LoggingMixin, ABC):
             self.exp_manager.set_best(
                 "early_stopping",
                 metric=self.exp_manager.early_stopping_metric,
-                higher_better=not self.exp_manager.lower_better,
+                higher_better=not self.exp_manager.early_stopping_lower_better,
             )
 
         if self.do_test:
@@ -799,7 +846,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 {**results, **(sample_info or {})}, test=True
             )
 
-        self.train_end()
+        self.run_end()
 
     def get_evals_from_dataset(
         self,
@@ -859,6 +906,10 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             outs = self.get_log_outputs_from_model(return_vals)
 
+            logits = self.accelerator.gather(logits)
+            inter_reprs = self.accelerator.gather(inter_reprs)
+            outs = self.accelerator.gather(outs)
+
             _, cls_loss, reg_loss = self.calculate_loss(
                 logits,
                 batch,
@@ -866,6 +917,9 @@ class BaseTrainer(LoggingMixin, ABC):
                 intermediate_representations=inter_reprs,
                 aggregate=False,
             )
+
+            cls_loss = self.accelerator.gather(cls_loss)
+            reg_loss = self.accelerator.gather(reg_loss)
 
             eval_loss += cls_loss.sum().item()
             eval_reg_loss += reg_loss.sum().item()
@@ -875,7 +929,9 @@ class BaseTrainer(LoggingMixin, ABC):
 
             eval_preds.extend(self.get_eval_preds_from_batch(logits))
             eval_true.extend(
-                self.get_eval_true_from_batch(self.batch_labels(batch))
+                self.get_eval_true_from_batch(
+                    self.accelerator.gather(self.batch_labels(batch))
+                )
             )
 
             scores = self.get_eval_scores_from_batch(logits)
@@ -885,7 +941,7 @@ class BaseTrainer(LoggingMixin, ABC):
             if outs:
                 eval_outs.extend(outs)
 
-            ids = self.batch_ids(batch)
+            ids = self.accelerator.gather(self.batch_ids(batch))
             if ids:
                 eval_ids.extend(ids)
 
