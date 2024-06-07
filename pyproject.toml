@@ -36,6 +36,8 @@ dependencies = [
   "transformers",
   "scikit-learn",
   "legm @ git+https://github.com/gchochla/legm.git@main",
+  "accelerate",
+  "gridparse @ git+https://github.com/gchochla/gridparse.git@main",
 ]
 
 [project.optional-dependencies]

@@ -15,10 +15,5 @@ setup(
         "accelerate",
         "gridparse @ git+https://github.com/gchochla/gridparse.git@main",
     ],
-    extras_require={
-        "dev": [
-            "black",
-            "pytest",
-        ]
-    },
+    extras_require={"dev": ["black", "pytest"]},
 )
