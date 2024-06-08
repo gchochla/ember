@@ -305,6 +305,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
             model_fn = self.exp_manager.get_save_filename()
             torch.save(
+                # TODO: check if unwrap is superfluous here, model was given without wrap to EarlyStopping
                 self.accelerator.unwrap_model(self.model).cpu().state_dict(),
                 model_fn,
             )
@@ -411,22 +412,28 @@ class BaseTrainer(LoggingMixin, ABC):
     @abstractmethod
     def input_batch_args(
         self, batch: Sequence[Any] | Mapping[str, Any]
-    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    ) -> (
+        dict[str, tuple[Any, ...] | dict[str, Any]]
+        | dict[str, Any]
+        | tuple[Any, ...]
+        | Any
+    ):
         """Creates args and kwargs dicts from batch for the model."""
 
     def _get_return_vals_from_model(self, batch):
         """Gets return values from the model."""
-        try:
-            args, kwargs = self.input_batch_args(batch)
-        except:
-            args = self.input_batch_args(batch)
-            if isinstance(args, Mapping):
-                kwargs, args = args, ()
-            else:
-                kwargs = {}
-
-        if not isinstance(args, (list, tuple)):
-            args = (args,)
+        input = self.input_batch_args(batch)
+        if isinstance(input, Mapping) and (
+            "args" in input or "kwargs" in input
+        ):
+            args = input.get("args", ())
+            kwargs = input.get("kwargs", {})
+        elif isinstance(input, Mapping):
+            kwargs, args = input, ()
+        else:
+            args, kwargs = input, {}
+            if not isinstance(args, (list, tuple)):
+                args = (args,)
 
         return self.model(*args, **kwargs)
 
