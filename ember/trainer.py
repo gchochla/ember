@@ -194,6 +194,10 @@ class BaseTrainer(LoggingMixin, ABC):
         )
 
         self.accelerator = Accelerator(cpu=not self.exp_manager.accelerate)
+        self.exp_manager.set_main_process(
+            self.accelerator.is_local_main_process
+        )
+        self.set_main_process(self.accelerator.is_local_main_process)
         self.exp_manager.device = self.accelerator.device
 
         self.model = model
@@ -260,6 +264,17 @@ class BaseTrainer(LoggingMixin, ABC):
         )
 
         self.log(f"Trainer set up.", "debug")
+        for ds, split in zip(
+            [self.train_dataset, self.dev_dataset, self.test_dataset],
+            ["train", "dev", "test"],
+        ):
+            if ds is None:
+                continue
+
+            if hasattr(ds, "debug_message"):
+                self.log(split + ": " + ds.debug_message(), "debug")
+            else:
+                self.log(f"Example sample from {split}: " + str(ds[0]), "debug")
 
     def train_init(self):
         warnings.warn(
@@ -916,9 +931,12 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             outs = self.get_log_outputs_from_model(return_vals)
 
-            logits = self.accelerator.gather(logits)
-            inter_reprs = self.accelerator.gather(inter_reprs)
-            outs = self.accelerator.gather(outs)
+            if logits is not None:
+                logits = self.accelerator.gather_for_metrics(logits)
+            if inter_reprs is not None:
+                inter_reprs = self.accelerator.gather_for_metrics(inter_reprs)
+            if outs is not None:
+                outs = self.accelerator.gather_for_metrics(outs)
 
             _, cls_loss, reg_loss = self.calculate_loss(
                 logits,
@@ -928,8 +946,8 @@ class BaseTrainer(LoggingMixin, ABC):
                 aggregate=False,
             )
 
-            cls_loss = self.accelerator.gather(cls_loss)
-            reg_loss = self.accelerator.gather(reg_loss)
+            cls_loss = self.accelerator.gather_for_metrics(cls_loss)
+            reg_loss = self.accelerator.gather_for_metrics(reg_loss)
 
             eval_loss += cls_loss.sum().item()
             eval_reg_loss += reg_loss.sum().item()
@@ -940,7 +958,9 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_preds.extend(self.get_eval_preds_from_batch(logits))
             eval_true.extend(
                 self.get_eval_true_from_batch(
-                    self.accelerator.gather(self.batch_labels(batch))
+                    self.accelerator.gather_for_metrics(
+                        self.batch_labels(batch)
+                    )
                 )
             )
 
@@ -951,7 +971,7 @@ class BaseTrainer(LoggingMixin, ABC):
             if outs:
                 eval_outs.extend(outs)
 
-            ids = self.accelerator.gather(self.batch_ids(batch))
+            ids = self.accelerator.gather_for_metrics(self.batch_ids(batch))
             if ids:
                 eval_ids.extend(ids)
 
