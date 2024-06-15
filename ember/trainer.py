@@ -239,7 +239,10 @@ class BaseTrainer(LoggingMixin, ABC):
                 logger=self.get_logger(),
             )
 
-        if self.exp_manager.eval_steps is None and self.do_train:
+        if (
+            getattr(self.exp_manager, "eval_steps", None) is None
+            and self.do_train
+        ):
             self.exp_manager.eval_steps = (
                 len(train_dataset) + self.exp_manager.train_batch_size - 1
             ) // self.exp_manager.train_batch_size
