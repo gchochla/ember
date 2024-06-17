@@ -1,4 +1,5 @@
 import tempfile
+import os
 from typing import Any
 
 import torch
@@ -77,6 +78,7 @@ class EarlyStopping(LoggingMixin):
             if save_model
             else None
         )
+        self.save_model = save_model
         self.saved = False
         self.patience = patience
         self.cnt = 0
@@ -84,6 +86,40 @@ class EarlyStopping(LoggingMixin):
         self.higher_better = not lower_better
 
         self.best = None
+        self.best_other = {}
+
+    def cleanup(self):
+        """Cleans up after early stopping."""
+        if self.tmp_fn is not None:
+            self.tmp_fn.close()
+            if os.path.exists(self.tmp_fn.name):
+                os.remove(self.tmp_fn.name)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Returns the state of the `EarlyStopping` instance."""
+        return dict(
+            saved=self.saved,
+            save_model=self.save_model,
+            patience=self.patience,
+            cnt=self.cnt,
+            delta=self.delta,
+            higher_better=self.higher_better,
+            best=self.best,
+            best_other=self.best_other,
+        )
+
+    def load_state_dict(
+        self, state_dict: dict[str, Any], model: torch.nn.Module
+    ):
+        for k, v in state_dict.items():
+            setattr(self, k, v)
+        self.tmp_fn = (
+            tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
+            if self.save_model
+            else None
+        )
+        self.model = model
+        self._save()
 
     def new_best(self, metric: float) -> bool:
         """Compares the `metric` appropriately to the current best.
@@ -136,6 +172,7 @@ class EarlyStopping(LoggingMixin):
         else:
             self.cnt += 1
             self.log(
+                f"Metric didn't improve: {self.best_str()} -> {metric:.6f}. "
                 f"Patience counter increased to {self.cnt}/{self.patience}",
                 "info",
             )
@@ -155,6 +192,7 @@ class EarlyStopping(LoggingMixin):
         if self.tmp_fn is not None and self.saved:
             state = torch.load(self.tmp_fn.name)
             self.model.load_state_dict(state)
+            self.cleanup()
         return self.model
 
     def _store_best(self, metric: float, **kwargs):
@@ -162,7 +200,7 @@ class EarlyStopping(LoggingMixin):
         measurements in kwargs."""
         self.best = metric
         for key in kwargs:
-            self.__setattr__("best_" + key, kwargs[key])
+            self.best_other["best_" + key] = kwargs[key]
 
     def get_metrics(
         self,
@@ -179,9 +217,7 @@ class EarlyStopping(LoggingMixin):
         if self.best is None:
             return
 
-        metrics = {
-            k: v for k, v in self.__dict__.items() if k.startswith("best_")
-        }
+        metrics = self.best_other
 
         if not metrics:
             metrics = {"metric": self.best}

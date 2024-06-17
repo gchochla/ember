@@ -32,9 +32,11 @@ def main():
     print(args)
 
     # create dummy datasets and model
-    train_ds = TensorDataset(torch.randn(100, 10), torch.randint(0, 3, (100,)))
-    dev_ds = TensorDataset(torch.randn(20, 10), torch.randint(0, 3, (20,)))
-    test_ds = TensorDataset(torch.randn(30, 10), torch.randint(0, 3, (30,)))
+    train_ds = TensorDataset(
+        torch.randn(10000, 10), torch.randint(0, 3, (10000,))
+    )
+    dev_ds = TensorDataset(torch.randn(2000, 10), torch.randint(0, 3, (2000,)))
+    test_ds = TensorDataset(torch.randn(3000, 10), torch.randint(0, 3, (3000,)))
     model = nn.Linear(10, 3)
 
     exp_mngr = ExperimentManager("logs/", "Tests")

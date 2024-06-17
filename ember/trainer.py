@@ -154,6 +154,11 @@ class BaseTrainer(LoggingMixin, ABC):
                 help="maximum gradient norm for gradient clipping",
                 searchable=True,
             ),
+            disable_intermediate_checkpoints=dict(
+                action="store_true",
+                help="disable intermediate checkpoints",
+                metadata=dict(disable_comparison=True),
+            ),
         )
 
         early_stopping = EarlyStopping.argparse_args()
@@ -263,6 +268,25 @@ class BaseTrainer(LoggingMixin, ABC):
             or (self.early_stopping.patience is not None and self.do_eval)
         )
 
+        if self.do_train:
+            dummy_dl = self.init_dataloader(self.train_dataset, train=True)
+
+            # otherwise
+            # num_batches=(
+            #     len(self.train_dataset)
+            #     + self.exp_manager.train_batch_size
+            #     - 1
+            # )
+            # // self.exp_manager.train_batch_size
+            # and we don't know if drop_last=True, etc
+
+            optimizer, scheduler = self.init_optimizer_scheduler(len(dummy_dl))
+        else:
+            optimizer, scheduler = None, None
+
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+
         self.log(f"Trainer set up.", "debug")
         for ds, split in zip(
             [self.train_dataset, self.dev_dataset, self.test_dataset],
@@ -276,6 +300,65 @@ class BaseTrainer(LoggingMixin, ABC):
             else:
                 self.log(f"Example sample from {split}: " + str(ds[0]), "debug")
 
+    def _model_state_dict(self):
+        state_dict = (
+            self.accelerator.unwrap_model(self.model).cpu().state_dict()
+        )
+        self.model = self.accelerator.prepare(self.model).to(
+            self.exp_manager.device
+        )
+        return state_dict
+
+    def _checkpoint_fn(self):
+        return os.path.join(
+            self.exp_manager._experiment_folder, "intermediate_checkpoint.pt"
+        )
+
+    def _checkpoint_dict(self, current_epoch):
+        return dict(
+            optimizer=getattr(self.optimizer, "state_dict", lambda: None)(),
+            scheduler=getattr(self.scheduler, "state_dict", lambda: None)(),
+            early_stopping=self.early_stopping.state_dict(),
+            model=self._model_state_dict() if self.do_train else None,
+            exp_manager=self.exp_manager.__getstate__(),
+            current_epoch=current_epoch + 1,
+        )
+
+    def need_to_load_intermediate(self):
+        """Whether to load intermediate checkpoint."""
+        return (
+            os.path.exists(self._checkpoint_fn())
+            and not self.exp_manager.disable_intermediate_checkpoints
+        )
+
+    def save_trainer_checkpoint(self, current_epoch: int):
+        """Saves checkpoint for trainer."""
+        if not self.exp_manager.disable_intermediate_checkpoints:
+            torch.save(
+                self._checkpoint_dict(current_epoch), self._checkpoint_fn()
+            )
+
+    def load_trainer_checkpoint(self) -> int:
+        """Loads checkpoint for trainer. Returns starting epoch."""
+        ckpt_fn = self._checkpoint_fn()
+        if os.path.exists(ckpt_fn):
+            ckpt = torch.load(ckpt_fn, map_location=self.exp_manager.device)
+            # TODO: need to init optimizer before
+            if ckpt["optimizer"]:
+                self.optimizer.load_state_dict(ckpt["optimizer"])
+            if ckpt["scheduler"]:
+                self.scheduler.load_state_dict(ckpt["scheduler"])
+            self.model.load_state_dict(ckpt["model"])
+            self.early_stopping.load_state_dict(
+                ckpt["early_stopping"], self.model
+            )
+            self.exp_manager.__setstate__(ckpt["exp_manager"])
+            self.exp_manager.start()
+
+            return ckpt["current_epoch"]
+        else:
+            return 0
+
     def train_init(self):
         warnings.warn(
             "`train_init` is deprecated, use `run_init` instead.",
@@ -283,35 +366,44 @@ class BaseTrainer(LoggingMixin, ABC):
         )
         return self.run_init()
 
-    def run_init(self):
-        """Used when training starts."""
-        if self.exp_manager.model_load_filename is not None:
-            loaded_state_dict = torch.load(self.exp_manager.model_load_filename)
-            # if classifier layers exist, then they do not need to match
-            if any(
-                [
-                    self.exp_manager.classifier_layer_name in layer
-                    for layer in loaded_state_dict
-                ]
-            ):
-                model_state_dict = self.model.state_dict()
-                for k in list(loaded_state_dict):
-                    if self.exp_manager.classifier_layer_name in k:
-                        if self.exp_manager.discard_classifier:
-                            if k in model_state_dict:
+    def run_init(self) -> int:
+        """Used when Trainer starts. Returns current epoch
+        (could be >0 because of intermediate checkpoint)."""
+
+        if self.need_to_load_intermediate():
+            current_epoch = self.load_trainer_checkpoint()
+        else:
+            current_epoch = 0
+            if self.exp_manager.model_load_filename is not None:
+                loaded_state_dict = torch.load(
+                    self.exp_manager.model_load_filename
+                )
+                # if classifier layers exist, then they do not need to match
+                if any(
+                    [
+                        self.exp_manager.classifier_layer_name in layer
+                        for layer in loaded_state_dict
+                    ]
+                ):
+                    model_state_dict = self.model.state_dict()
+                    for k in list(loaded_state_dict):
+                        if self.exp_manager.classifier_layer_name in k:
+                            if self.exp_manager.discard_classifier:
+                                if k in model_state_dict:
+                                    loaded_state_dict[k] = model_state_dict[k]
+                                else:
+                                    loaded_state_dict.pop(k)
+
+                            elif k in model_state_dict and (
+                                loaded_state_dict[k].shape
+                                != model_state_dict[k].shape
+                            ):
                                 loaded_state_dict[k] = model_state_dict[k]
-                            else:
-                                loaded_state_dict.pop(k)
 
-                        elif k in model_state_dict and (
-                            loaded_state_dict[k].shape
-                            != model_state_dict[k].shape
-                        ):
-                            loaded_state_dict[k] = model_state_dict[k]
-
-            self.model.load_state_dict(loaded_state_dict)
+                self.model.load_state_dict(loaded_state_dict)
 
         self.model = self.accelerator.prepare(self.model)
+        return current_epoch
 
     def _save_best_model(self):
         """Loads best model to `model` attribute
@@ -322,11 +414,7 @@ class BaseTrainer(LoggingMixin, ABC):
             self.accelerator.wait_for_everyone()
 
             model_fn = self.exp_manager.get_save_filename()
-            torch.save(
-                # TODO: check if unwrap is superfluous here, model was given without wrap to EarlyStopping
-                self.accelerator.unwrap_model(self.model).cpu().state_dict(),
-                model_fn,
-            )
+            torch.save(self._model_state_dict(), model_fn)
             if self.exp_manager.model_save_filename:
                 os.symlink(model_fn, self.exp_manager.model_save_filename)
             self.model.to(self.exp_manager.device)
@@ -345,6 +433,9 @@ class BaseTrainer(LoggingMixin, ABC):
         self._save_best_model()
         self.exp_manager.aggregate_results()
         self.exp_manager.plot()
+        if os.path.exists(self._checkpoint_fn()):
+            self.log("Removing intermediate checkpoint", "debug")
+            os.remove(self._checkpoint_fn())
 
     def eval_init(self, data_loader: DataLoader):
         """Used when evaluation starts.
@@ -682,7 +773,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
         self.model = self.model.to(self.exp_manager.device)
         self.model.train()
-        self.run_init()
+        current_epoch = self.run_init() or 0
 
         kwargs = (
             dict(shuffle=True)
@@ -694,11 +785,6 @@ class BaseTrainer(LoggingMixin, ABC):
             data_loader = self.init_dataloader(
                 self.train_dataset, train=True, **kwargs
             )
-            self.optimizer, self.scheduler = self.init_optimizer_scheduler(
-                len(data_loader)
-            )
-        else:
-            self.optimizer, self.scheduler = None, None
 
         if self.do_eval:
             dev_data_loader = self.init_dataloader(
@@ -715,7 +801,7 @@ class BaseTrainer(LoggingMixin, ABC):
             early_stop = False
             n_samples = 0
 
-            for epoch in range(num_epochs):
+            for epoch in range(current_epoch, num_epochs):
                 if early_stop:
                     # the other early stopping check only breaks from inner loop
                     break
@@ -843,6 +929,8 @@ class BaseTrainer(LoggingMixin, ABC):
                                 "info",
                             )
                             break
+
+                self.save_trainer_checkpoint(epoch)
 
         early_stopping_metrics = self.early_stopping.get_metrics()
         if early_stopping_metrics is not None:
