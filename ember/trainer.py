@@ -801,7 +801,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
 
         if self.do_train:
-            num_epochs = int(self.exp_manager.num_train_epochs or 1)
+            num_epochs = int(self.exp_manager.num_train_epochs)
             early_stop = False
             n_samples = 0
 
