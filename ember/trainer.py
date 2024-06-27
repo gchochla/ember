@@ -343,7 +343,6 @@ class BaseTrainer(LoggingMixin, ABC):
         ckpt_fn = self._checkpoint_fn()
         if os.path.exists(ckpt_fn):
             ckpt = torch.load(ckpt_fn, map_location=self.exp_manager.device)
-            # TODO: need to init optimizer before
             if ckpt["optimizer"]:
                 self.optimizer.load_state_dict(ckpt["optimizer"])
             if ckpt["scheduler"]:
@@ -430,6 +429,8 @@ class BaseTrainer(LoggingMixin, ABC):
     def run_end(self):
         """Used when training (and evaluation) ends."""
         self.exp_manager.log_metrics()
+        # TODO: if something fails after here,
+        # exp_manager will log the same experiment twice
         self._save_best_model()
         self.exp_manager.aggregate_results()
         self.exp_manager.plot()
@@ -613,6 +614,7 @@ class BaseTrainer(LoggingMixin, ABC):
         labels: torch.Tensor,
         train: bool,
         aggregate: bool = True,
+        epoch: int = -1,
     ) -> torch.Tensor:
         """Calculates train loss based on predicted logits and labels.
 
@@ -637,6 +639,7 @@ class BaseTrainer(LoggingMixin, ABC):
         batch: Sequence[Any],
         train: bool,
         aggregate: bool = True,
+        epoch: int = -1,
     ) -> torch.Tensor:
         """Calculates regularization loss based on some intermediate
         representation and the batch information (like labels).
@@ -666,6 +669,7 @@ class BaseTrainer(LoggingMixin, ABC):
         train: bool,
         intermediate_representations: torch.Tensor | None = None,
         aggregate: bool = True,
+        epoch: int = -1,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Calculates loss based on predicted logits and labels.
 
@@ -679,11 +683,11 @@ class BaseTrainer(LoggingMixin, ABC):
             Loss, train loss and regularization loss.
         """
         train_loss = self.calculate_cls_loss(
-            logits, self.batch_labels(batch), train, aggregate
+            logits, self.batch_labels(batch), train, aggregate, epoch
         )
 
         regularization_loss = self.calculate_regularization_loss(
-            intermediate_representations, logits, batch, train, aggregate
+            intermediate_representations, logits, batch, train, aggregate, epoch
         )
 
         return (
@@ -857,6 +861,7 @@ class BaseTrainer(LoggingMixin, ABC):
                         batch,
                         train=True,
                         intermediate_representations=inter_repr,
+                        epoch=epoch,
                     )
 
                     self.optimizer.zero_grad()
@@ -965,6 +970,7 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
+        epoch: int = -1,
     ) -> tuple[
         list[list[int]],
         list[list[float]],
@@ -1032,6 +1038,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 train=False,
                 intermediate_representations=inter_reprs,
                 aggregate=False,
+                epoch=epoch,
             )
 
             cls_loss = self.accelerator.gather_for_metrics(cls_loss)
@@ -1083,6 +1090,7 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
+        epoch: int = -1,
     ) -> tuple[dict[str, float]]:
         """Evaluates model on `data_loader`.
 
@@ -1104,7 +1112,7 @@ class BaseTrainer(LoggingMixin, ABC):
             eval_reg_losses,
             eval_loss,
             eval_reg_loss,
-        ) = self.get_evals_from_dataset(data_loader, tqdm_message)
+        ) = self.get_evals_from_dataset(data_loader, tqdm_message, epoch)
 
         results = dict(
             eval_loss=eval_loss, eval_regularization_loss=eval_reg_loss
