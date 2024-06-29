@@ -559,7 +559,7 @@ class BaseTrainer(LoggingMixin, ABC):
         return_vals: Any,
         batch: Sequence[Any],
         data_loader: DataLoader,
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> torch.Tensor:
         """Grabs logits from model's return values. So far, extra arguments
         a "hacky" way to substitute images for computed embeddings when image
@@ -614,7 +614,7 @@ class BaseTrainer(LoggingMixin, ABC):
         labels: torch.Tensor,
         train: bool,
         aggregate: bool = True,
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> torch.Tensor:
         """Calculates train loss based on predicted logits and labels.
 
@@ -639,7 +639,7 @@ class BaseTrainer(LoggingMixin, ABC):
         batch: Sequence[Any],
         train: bool,
         aggregate: bool = True,
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> torch.Tensor:
         """Calculates regularization loss based on some intermediate
         representation and the batch information (like labels).
@@ -669,7 +669,7 @@ class BaseTrainer(LoggingMixin, ABC):
         train: bool,
         intermediate_representations: torch.Tensor | None = None,
         aggregate: bool = True,
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Calculates loss based on predicted logits and labels.
 
@@ -906,6 +906,7 @@ class BaseTrainer(LoggingMixin, ABC):
                             aggr_results, sample_info = self.evaluate(
                                 dev_data_loader,
                                 f"Evaluating after {step+1} steps (epoch {epoch+1})",
+                                epoch=epoch,
                             )
                             self.exp_manager.set_dict_metrics(
                                 {**aggr_results, **(sample_info or {})},
@@ -970,7 +971,7 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> tuple[
         list[list[int]],
         list[list[float]],
@@ -1090,7 +1091,7 @@ class BaseTrainer(LoggingMixin, ABC):
         self,
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
-        epoch: int = -1,
+        epoch: int | None = None,
     ) -> tuple[dict[str, float]]:
         """Evaluates model on `data_loader`.
 
