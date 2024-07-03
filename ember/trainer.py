@@ -138,7 +138,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 type=int,
                 help="per how many steps to evaluate on dev, default is epoch",
             ),
-            max_steps=dict(default=-1, type=int, help="max number of steps"),
+            max_steps=dict(type=int, help="max number of steps"),
             num_train_epochs=dict(
                 type=int, help="number of training epochs", searchable=True
             ),
@@ -260,7 +260,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
         self.set_num_steps = (
             self.exp_manager.num_train_epochs is not None
-            or self.exp_manager.max_steps > -1
+            or self.exp_manager.max_steps is not None
         )
 
         assert not self.do_train or (
@@ -826,7 +826,7 @@ class BaseTrainer(LoggingMixin, ABC):
                     step += epoch * len(data_loader)
 
                     early_stop = (
-                        self.exp_manager.max_steps > -1
+                        self.exp_manager.max_steps is not None
                         and step >= self.exp_manager.max_steps
                     )
                     if early_stop:
