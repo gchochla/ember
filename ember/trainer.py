@@ -1,7 +1,7 @@
 import os
 from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
-from time import time
+from time import time, sleep
 import warnings
 
 import torch
@@ -189,7 +189,13 @@ class BaseTrainer(LoggingMixin, ABC):
         """
 
         self.exp_manager = experiment_manager
+        self.accelerator = Accelerator(cpu=not self.exp_manager.accelerate)
+        self.exp_manager.set_main_process(
+            self.accelerator.is_local_main_process
+        )
         self.exp_manager.start()
+        self.accelerator.wait_for_everyone()
+        self.exp_manager.device = self.accelerator.device
 
         super().__init__(
             *args,
@@ -198,12 +204,7 @@ class BaseTrainer(LoggingMixin, ABC):
             logging_level=self.exp_manager.logging_level,
         )
 
-        self.accelerator = Accelerator(cpu=not self.exp_manager.accelerate)
-        self.exp_manager.set_main_process(
-            self.accelerator.is_local_main_process
-        )
         self.set_main_process(self.accelerator.is_local_main_process)
-        self.exp_manager.device = self.accelerator.device
 
         self.model = model
         self.train_dataset = train_dataset
@@ -239,7 +240,6 @@ class BaseTrainer(LoggingMixin, ABC):
                 lower_better=self.exp_manager.early_stopping_lower_better,
                 logger=self.get_logger(),
             )
-            print(self.early_stopping.get_logger())
         else:
             self.early_stopping = EarlyStopping(
                 self.model,
@@ -247,14 +247,6 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.exp_manager.save_model,
                 logger=self.get_logger(),
             )
-
-        if (
-            getattr(self.exp_manager, "eval_steps", None) is None
-            and self.do_train
-        ):
-            self.exp_manager.eval_steps = (
-                len(train_dataset) + self.exp_manager.train_batch_size - 1
-            ) // self.exp_manager.train_batch_size
 
         self.verbose = not self.exp_manager.disable_tqdm
 
@@ -270,17 +262,9 @@ class BaseTrainer(LoggingMixin, ABC):
 
         if self.do_train:
             dummy_dl = self.init_dataloader(self.train_dataset, train=True)
-
-            # otherwise
-            # num_batches=(
-            #     len(self.train_dataset)
-            #     + self.exp_manager.train_batch_size
-            #     - 1
-            # )
-            # // self.exp_manager.train_batch_size
-            # and we don't know if drop_last=True, etc
-
             optimizer, scheduler = self.init_optimizer_scheduler(len(dummy_dl))
+            if self.exp_manager.eval_steps is None:
+                self.exp_manager.eval_steps = len(dummy_dl)
         else:
             optimizer, scheduler = None, None
 
@@ -301,12 +285,8 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.log(f"Example sample from {split}: " + str(ds[0]), "debug")
 
     def _model_state_dict(self):
-        state_dict = (
-            self.accelerator.unwrap_model(self.model).cpu().state_dict()
-        )
-        self.model = self.accelerator.prepare(self.model).to(
-            self.exp_manager.device
-        )
+        self.accelerator.wait_for_everyone()
+        state_dict = self.model.state_dict()
         return state_dict
 
     def _checkpoint_fn(self):
@@ -334,7 +314,7 @@ class BaseTrainer(LoggingMixin, ABC):
     def save_trainer_checkpoint(self, current_epoch: int):
         """Saves checkpoint for trainer."""
         if not self.exp_manager.disable_intermediate_checkpoints:
-            torch.save(
+            self.accelerator.save(
                 self._checkpoint_dict(current_epoch), self._checkpoint_fn()
             )
 
@@ -342,7 +322,7 @@ class BaseTrainer(LoggingMixin, ABC):
         """Loads checkpoint for trainer. Returns starting epoch."""
         ckpt_fn = self._checkpoint_fn()
         if os.path.exists(ckpt_fn):
-            ckpt = torch.load(ckpt_fn, map_location=self.exp_manager.device)
+            ckpt = torch.load(ckpt_fn)
             if ckpt["optimizer"]:
                 self.optimizer.load_state_dict(ckpt["optimizer"])
             if ckpt["scheduler"]:
@@ -353,6 +333,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             self.exp_manager.__setstate__(ckpt["exp_manager"])
             self.exp_manager.start()
+            self.accelerator.wait_for_everyone()
 
             return ckpt["current_epoch"]
         else:
@@ -370,6 +351,7 @@ class BaseTrainer(LoggingMixin, ABC):
         (could be >0 because of intermediate checkpoint)."""
 
         if self.need_to_load_intermediate():
+            self.model = self.accelerator.prepare(self.model)
             current_epoch = self.load_trainer_checkpoint()
         else:
             current_epoch = 0
@@ -401,7 +383,8 @@ class BaseTrainer(LoggingMixin, ABC):
 
                 self.model.load_state_dict(loaded_state_dict)
 
-        self.model = self.accelerator.prepare(self.model)
+            self.model = self.accelerator.prepare(self.model)
+
         return current_epoch
 
     def _save_best_model(self):
@@ -658,9 +641,10 @@ class BaseTrainer(LoggingMixin, ABC):
         """
         if aggregate:
             return torch.tensor(0.0, device=self.exp_manager.device)
-        return torch.zeros(
-            len(self.batch_labels(batch)), device=self.exp_manager.device
-        )
+        labels = self.batch_labels(batch)
+        if not train:
+            labels = self.accelerator.gather_for_metrics(labels)
+        return torch.zeros(len(labels), device=self.exp_manager.device)
 
     def calculate_loss(
         self,
@@ -682,8 +666,12 @@ class BaseTrainer(LoggingMixin, ABC):
         Returns:
             Loss, train loss and regularization loss.
         """
+        labels = self.batch_labels(batch)
+        if not train:
+            labels = self.accelerator.gather_for_metrics(labels)
+
         train_loss = self.calculate_cls_loss(
-            logits, self.batch_labels(batch), train, aggregate, epoch
+            logits, labels, train, aggregate, epoch
         )
 
         regularization_loss = self.calculate_regularization_loss(
@@ -789,6 +777,7 @@ class BaseTrainer(LoggingMixin, ABC):
             data_loader = self.init_dataloader(
                 self.train_dataset, train=True, **kwargs
             )
+            self.accelerator.print(len(data_loader))
 
         if self.do_eval:
             dev_data_loader = self.init_dataloader(
@@ -819,6 +808,7 @@ class BaseTrainer(LoggingMixin, ABC):
                     )
                     if not self.exp_manager.disable_tqdm
                     and not isinstance(data_loader.dataset, IterableDataset)
+                    and self.is_main_process()
                     else data_loader
                 )
 
@@ -833,7 +823,10 @@ class BaseTrainer(LoggingMixin, ABC):
                         self.log("Forcibly stopping training", "info")
                         break
 
-                    if step % self.exp_manager.eval_steps == 0:
+                    if (
+                        step % self.exp_manager.eval_steps == 0
+                        or "train_loss" not in locals()
+                    ):
                         # FIRST step of current collection of evaluation steps
                         # will always init when epoch == 0, step == 0
                         train_loss = 0.0
@@ -1001,6 +994,7 @@ class BaseTrainer(LoggingMixin, ABC):
             tqdm(data_loader, desc=tqdm_message, dynamic_ncols=True)
             if not self.exp_manager.disable_tqdm
             and not isinstance(data_loader.dataset, IterableDataset)
+            and self.is_main_process()
             else data_loader
         )
 
@@ -1067,9 +1061,9 @@ class BaseTrainer(LoggingMixin, ABC):
             if outs:
                 eval_outs.extend(outs)
 
-            ids = self.accelerator.gather_for_metrics(self.batch_ids(batch))
+            ids = self.batch_ids(batch)
             if ids:
-                eval_ids.extend(ids)
+                eval_ids.extend(self.accelerator.gather_for_metrics(ids))
 
         ### compute eval metrics
         eval_loss /= len(data_loader.dataset)

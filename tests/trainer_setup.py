@@ -31,13 +31,26 @@ def main():
     args, metadata = parse_args()
     print(args)
 
+    train_len = 100_000
+    dev_len = 20_000
+    test_len = 30_000
+    feat_dim = 10
+    num_classes = 3
+
     # create dummy datasets and model
     train_ds = TensorDataset(
-        torch.randn(10000, 10), torch.randint(0, 3, (10000,))
+        torch.randn(train_len, feat_dim),
+        torch.randint(0, num_classes, (train_len,)),
     )
-    dev_ds = TensorDataset(torch.randn(2000, 10), torch.randint(0, 3, (2000,)))
-    test_ds = TensorDataset(torch.randn(3000, 10), torch.randint(0, 3, (3000,)))
-    model = nn.Linear(10, 3)
+    dev_ds = TensorDataset(
+        torch.randn(dev_len, feat_dim),
+        torch.randint(0, num_classes, (dev_len,)),
+    )
+    test_ds = TensorDataset(
+        torch.randn(test_len, feat_dim),
+        torch.randint(0, num_classes, (test_len,)),
+    )
+    model = nn.Linear(feat_dim, num_classes)
 
     exp_mngr = ExperimentManager("logs/", "Tests")
     exp_mngr.set_namespace_params(args)
