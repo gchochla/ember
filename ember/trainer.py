@@ -777,7 +777,6 @@ class BaseTrainer(LoggingMixin, ABC):
             data_loader = self.init_dataloader(
                 self.train_dataset, train=True, **kwargs
             )
-            self.accelerator.print(len(data_loader))
 
         if self.do_eval:
             dev_data_loader = self.init_dataloader(
