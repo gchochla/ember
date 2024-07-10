@@ -357,7 +357,8 @@ class BaseTrainer(LoggingMixin, ABC):
             current_epoch = 0
             if self.exp_manager.model_load_filename is not None:
                 loaded_state_dict = torch.load(
-                    self.exp_manager.model_load_filename
+                    self.exp_manager.model_load_filename,
+                    map_location=self.exp_manager.device,
                 )
                 # if classifier layers exist, then they do not need to match
                 if any(
