@@ -675,7 +675,7 @@ class BaseTrainer(LoggingMixin, ABC):
         return self.get_extra_data_from_model(return_vals)
 
     def get_extra_data_from_model(
-        self, return_vals: Any
+        self, return_vals: Any, batch: Sequence[Any] | None = None
     ) -> dict[str, list[Any]]:
         """Grabs extra data from the model for logging purposes.
         This could include, e.g., attention maps.
@@ -1139,7 +1139,7 @@ class BaseTrainer(LoggingMixin, ABC):
             inter_reprs = self.get_intermediate_repr_from_model(
                 return_vals, batch
             )
-            extra = self.get_extra_data_from_model(return_vals)
+            extra = self.get_extra_data_from_model(return_vals, batch)
 
             if logits is not None:
                 logits = self.accelerator.gather_for_metrics(logits)
