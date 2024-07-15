@@ -1187,10 +1187,11 @@ class BaseTrainer(LoggingMixin, ABC):
                 eval_scores.extend(scores)
 
             if extra:
-                eval_extras = {
-                    k: eval_extras.get(k, []).extend(v)
-                    for k, v in extra.items()
-                }
+                for k, v in extra.items():
+                    if isinstance(v, list):
+                        eval_extras.setdefault(k, []).extend(v)
+                    else:
+                        eval_extras.setdefault(k, []).append(v)
 
             ids = self.batch_ids(batch)
             if ids:
