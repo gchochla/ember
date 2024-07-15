@@ -1,7 +1,7 @@
 import os
 from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
-from time import time, sleep
+from time import time
 import warnings
 
 import torch
@@ -11,6 +11,9 @@ from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 from tqdm import tqdm
 from transformers.optimization import get_linear_schedule_with_warmup
 from accelerate import Accelerator
+
+# from dataclasses import dataclass
+# from transformers.utils.generic import ModelOutput
 
 from ember.train_utils import EarlyStopping
 from legm import ExperimentManager, LoggingMixin
@@ -27,6 +30,78 @@ def result_str(results: dict[str, float]):
             for key, value in results.items()
         ]
     )
+
+
+def identify(idict):
+    ids = idict.get("ids", None)
+
+    if ids is None:
+        return None
+
+    odict = {}
+    for k, vs in idict.items():
+        if k == "ids":
+            continue
+        if vs is None:
+            vs = [None] * len(ids)
+        for id, v in zip(ids, vs):
+            odict.setdefault(id, {}).setdefault(k, v)
+    return odict
+
+
+# class FunctionOutput(ModelOutput):
+#     """Extandable dict/namespace that is compatible with
+#     torch.nn.parallel.DistributedDataParallel"""
+
+#     def __setattr__(self, name, value):
+#         v = super().__setattr__(name, value)
+#         super().__setitem__(name, value)
+#         return v
+
+
+# class FunctionOutputWithID(FunctionOutput):
+#     """Extandable dict/namespace that is compatible with
+#     torch.nn.parallel.DistributedDataParallel. Used for indexed metrics."""
+
+#     ids: list[Any]
+
+#     def identify(self):
+#         ids = self.ids
+
+#         if ids is None:
+#             return None
+
+#         odict = {}
+#         for k, vs in self.items():
+#             if k == "ids":
+#                 continue
+#             if vs is None:
+#                 vs = [None] * len(ids)
+#             for id, v in zip(ids, vs):
+#                 odict.setdefault(id, {}).setdefault(k, v)
+#         return odict
+
+
+# @dataclass
+# class EvalOutputID(FunctionOutputWithID):
+#     preds: list[int] | None = None
+#     scores: list[float] | None = None
+#     gt: list[int] | None = None
+#     log_outs: list[Any] | None = None
+#     classification_losses: list[float] | None = None
+#     regularization_losses: list[float] | None = None
+
+
+# @dataclass
+# class EvalOutput(FunctionOutput):
+#     classification_loss: float | None = None
+#     regularization_loss: float | None = None
+
+
+# @dataclass
+# class Metrics(FunctionOutput):
+#     eval_classification_loss: float | None = None
+#     eval_regularization_loss: float | None = None
 
 
 class BaseTrainer(LoggingMixin, ABC):
@@ -582,14 +657,34 @@ class BaseTrainer(LoggingMixin, ABC):
                 regularization losses, if necessary.
         """
 
-    def get_log_outputs_from_model(self, return_vals: Any) -> list[Any]:
+    def get_log_outputs_from_model(self, return_vals: Any) -> dict[str, Any]:
         """Grabs outputs of the model for logging purposes.
+        Outputs should be one per example.
 
         Args:
             return_vals: return values from the model's forward function.
 
         Returns:
             Some outputs of the model for logging purposes.
+        """
+
+        warnings.warn(
+            "`get_log_outputs_from_model` is deprecated, use `get_extra_data_from_model` instead.",
+            DeprecationWarning,
+        )
+        return self.get_extra_data_from_model(return_vals)
+
+    def get_extra_data_from_model(
+        self, return_vals: Any
+    ) -> dict[str, list[Any]]:
+        """Grabs extra data from the model for logging purposes.
+        This could include, e.g., attention maps.
+
+        Args:
+            return_vals: return values from the model's forward function.
+
+        Returns:
+            Some extra data from the model for logging purposes.
         """
 
     def calculate_cls_loss(
@@ -599,7 +694,11 @@ class BaseTrainer(LoggingMixin, ABC):
         train: bool,
         aggregate: bool = True,
         epoch: int | None = None,
-    ) -> torch.Tensor:
+    ) -> (
+        torch.Tensor
+        | dict[str, torch.Tensor]
+        | tuple[dict[str, torch.Tensor], dict[str, float]]
+    ):
         """Calculates train loss based on predicted logits and labels.
 
         Args:
@@ -624,7 +723,11 @@ class BaseTrainer(LoggingMixin, ABC):
         train: bool,
         aggregate: bool = True,
         epoch: int | None = None,
-    ) -> torch.Tensor:
+    ) -> (
+        torch.Tensor
+        | dict[str, torch.Tensor]
+        | tuple[dict[str, torch.Tensor], dict[str, float]]
+    ):
         """Calculates regularization loss based on some intermediate
         representation and the batch information (like labels).
 
@@ -667,6 +770,22 @@ class BaseTrainer(LoggingMixin, ABC):
         Returns:
             Loss, train loss and regularization loss.
         """
+
+        def unpack_return_loss(loss, default_key):
+            if isinstance(loss, (list, tuple)):
+                loss, coef = loss
+            else:
+                if isinstance(loss, Mapping):
+                    coef = {k: 1.0 for k in loss}
+                else:
+                    coef = 1.0
+
+            if not isinstance(loss, Mapping):
+                loss = {default_key: loss}
+                coef = {default_key: coef}
+
+            return loss, coef
+
         labels = self.batch_labels(batch)
         if not train:
             labels = self.accelerator.gather_for_metrics(labels)
@@ -674,15 +793,24 @@ class BaseTrainer(LoggingMixin, ABC):
         train_loss = self.calculate_cls_loss(
             logits, labels, train, aggregate, epoch
         )
+        train_loss, train_coef = unpack_return_loss(
+            train_loss, "classification_loss"
+        )
 
-        regularization_loss = self.calculate_regularization_loss(
+        reg_loss = self.calculate_regularization_loss(
             intermediate_representations, logits, batch, train, aggregate, epoch
+        )
+        reg_loss, reg_coef = unpack_return_loss(reg_loss, "regularization_loss")
+
+        total_loss = sum(
+            (train_coef | reg_coef)[k] * loss
+            for k, loss in (train_loss | reg_loss).items()
         )
 
         return (
-            train_loss + regularization_loss,
+            total_loss,
             train_loss,
-            regularization_loss,
+            reg_loss,
         )
 
     def init_optimizer(self) -> torch.optim.Optimizer:
@@ -829,8 +957,8 @@ class BaseTrainer(LoggingMixin, ABC):
                     ):
                         # FIRST step of current collection of evaluation steps
                         # will always init when epoch == 0, step == 0
-                        train_loss = 0.0
-                        cum_regularization_loss = 0.0
+                        train_loss = {}
+                        cum_reg_loss = {}
                         time_start = time()
                         step_samples = 0
 
@@ -871,24 +999,35 @@ class BaseTrainer(LoggingMixin, ABC):
 
                     # ACTUAL train loop end
 
-                    train_loss += cls_loss.item() * self.batch_len(batch)
-                    cum_regularization_loss += reg_loss.item() * self.batch_len(
-                        batch
-                    )
+                    train_loss = {
+                        k: train_loss.get(k, 0)
+                        + loss.item() * self.batch_len(batch)
+                        for k, loss in cls_loss.items()
+                    }
+                    cum_reg_loss = {
+                        k: cum_reg_loss.get(k, 0)
+                        + loss.item() * self.batch_len(batch)
+                        for k, loss in reg_loss.items()
+                    }
+
                     n_samples += self.batch_len(batch)
                     step_samples += self.batch_len(batch)
 
                     if (step + 1) % self.exp_manager.eval_steps == 0:
                         # LAST step of current collection of evaluation steps
 
-                        train_loss /= step_samples
-                        cum_regularization_loss /= step_samples
+                        train_loss = {
+                            k: v / step_samples for k, v in train_loss.items()
+                        }
+                        cum_reg_loss = {
+                            k: v / step_samples for k, v in cum_reg_loss.items()
+                        }
 
                         results = dict(
-                            train_loss=train_loss,
-                            regularization_loss=cum_regularization_loss,
                             time_per_sample=(time() - time_start)
                             / step_samples,
+                            **train_loss,
+                            **cum_reg_loss,
                         )
 
                         self.exp_manager.set_dict_metrics(
@@ -965,29 +1104,11 @@ class BaseTrainer(LoggingMixin, ABC):
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
         epoch: int | None = None,
-    ) -> tuple[
-        list[list[int]],
-        list[list[float]],
-        list[list[int]],
-        list[Any],
-        list[Any],
-        list[float],
-        list[float],
-        float,
-        float,
-    ]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Evaluates the model on the given dataset.
 
         Returns:
-            eval_preds: list of predictions for each example.
-            eval_scores: list of scores for each example.
-            eval_true: list of true labels for each example.
-            eval_ids: list of ids for each example.
-            eval_outs: list of model outputs for each example.
-            eval_losses: list of losses for each example.
-            eval_reg_losses: list of regularization losses for each example.
-            eval_loss: Loss on the dataset.
-            eval_reg_loss: Regularization loss on the dataset.
+            Inference results without and with IDs.
         """
 
         batch_itr = (
@@ -1001,12 +1122,12 @@ class BaseTrainer(LoggingMixin, ABC):
         eval_preds = []
         eval_scores = []
         eval_true = []
-        eval_losses = []
-        eval_reg_losses = []
+        eval_losses = {}
+        eval_reg_losses = {}
+        eval_loss = {}
+        eval_reg_loss = {}
         eval_ids = []
-        eval_outs = []
-        eval_loss = 0.0
-        eval_reg_loss = 0.0
+        eval_extras = {}
 
         for batch in batch_itr:
             batch = self.batch_to_device(batch)
@@ -1018,14 +1139,14 @@ class BaseTrainer(LoggingMixin, ABC):
             inter_reprs = self.get_intermediate_repr_from_model(
                 return_vals, batch
             )
-            outs = self.get_log_outputs_from_model(return_vals)
+            extra = self.get_extra_data_from_model(return_vals)
 
             if logits is not None:
                 logits = self.accelerator.gather_for_metrics(logits)
             if inter_reprs is not None:
                 inter_reprs = self.accelerator.gather_for_metrics(inter_reprs)
-            if outs is not None:
-                outs = self.accelerator.gather_for_metrics(outs)
+            if extra is not None:
+                extra = self.accelerator.gather_for_metrics(extra)
 
             _, cls_loss, reg_loss = self.calculate_loss(
                 logits,
@@ -1039,11 +1160,18 @@ class BaseTrainer(LoggingMixin, ABC):
             cls_loss = self.accelerator.gather_for_metrics(cls_loss)
             reg_loss = self.accelerator.gather_for_metrics(reg_loss)
 
-            eval_loss += cls_loss.sum().item()
-            eval_reg_loss += reg_loss.sum().item()
-
-            eval_losses.extend(cls_loss.tolist())
-            eval_reg_losses.extend(reg_loss.tolist())
+            for k in cls_loss:
+                if cls_loss[k].ndim > 0:
+                    eval_losses.setdefault(k, []).extend(cls_loss[k].tolist())
+                else:
+                    eval_loss.setdefault(k, []).append(cls_loss[k].item())
+            for k in reg_loss:
+                if reg_loss[k].ndim > 0:
+                    eval_reg_losses.setdefault(k, []).extend(
+                        reg_loss[k].tolist()
+                    )
+                else:
+                    eval_reg_loss.setdefault(k, []).append(reg_loss[k].item())
 
             eval_preds.extend(self.get_eval_preds_from_batch(logits))
             eval_true.extend(
@@ -1058,27 +1186,45 @@ class BaseTrainer(LoggingMixin, ABC):
             if scores:
                 eval_scores.extend(scores)
 
-            if outs:
-                eval_outs.extend(outs)
+            if extra:
+                eval_extras = {
+                    k: eval_extras.get(k, []).extend(v)
+                    for k, v in extra.items()
+                }
 
             ids = self.batch_ids(batch)
             if ids:
                 eval_ids.extend(self.accelerator.gather_for_metrics(ids))
 
         ### compute eval metrics
-        eval_loss /= len(data_loader.dataset)
-        eval_reg_loss /= len(data_loader.dataset)
+        eval_loss = {
+            k: sum(v) / len(v) for k, v in (eval_losses | eval_loss).items()
+        }
+        eval_reg_loss = {
+            k: sum(v) / len(v)
+            for k, v in (eval_reg_losses | eval_reg_loss).items()
+        }
+
+        eval_extras_id = {}
+        for k in eval_extras:
+            if len(eval_extras[k]) == len(eval_ids):
+                eval_extras_id[k] = eval_extras[k]
 
         return (
-            eval_preds,
-            eval_scores,
-            eval_true,
-            eval_ids,
-            eval_outs,
-            eval_losses,
-            eval_reg_losses,
-            eval_loss,
-            eval_reg_loss,
+            dict(
+                **eval_loss,
+                **eval_reg_loss,
+            ),
+            dict(
+                preds=eval_preds,
+                scores=eval_scores,
+                gt=eval_true,
+                ids=eval_ids,
+                **eval_losses,
+                **eval_reg_losses,
+                **eval_extras_id,
+            ),
+            eval_extras,
         )
 
     def evaluate(
@@ -1097,60 +1243,22 @@ class BaseTrainer(LoggingMixin, ABC):
         self.model.eval()
         self.eval_init(data_loader)
 
-        (
-            eval_preds,
-            eval_scores,
-            eval_true,
-            eval_ids,
-            eval_outs,
-            eval_losses,
-            eval_reg_losses,
-            eval_loss,
-            eval_reg_loss,
-        ) = self.get_evals_from_dataset(data_loader, tqdm_message, epoch)
-
-        results = dict(
-            eval_loss=eval_loss, eval_regularization_loss=eval_reg_loss
+        eval_outs, eval_outs_id, eval_extras = self.get_evals_from_dataset(
+            data_loader, tqdm_message, epoch
         )
         others = self.evaluation_metrics(
-            eval_ids,
-            eval_true,
-            eval_preds,
-            eval_scores,
-            eval_losses,
-            eval_reg_losses,
+            eval_outs,
+            eval_outs_id,
+            eval_extras,
             data_loader=data_loader,
         )
         if others:
-            results.update(others)
+            eval_outs.update(others)
 
         self.model.train()
         self.eval_end(data_loader)
 
-        sample_info = None
-
-        if eval_ids is not None:
-            sample_info = {
-                _id: dict(
-                    pred=pred,
-                    true=true,
-                    score=score,
-                    out=out,
-                    loss=loss,
-                    reg_loss=reg_loss,
-                )
-                for _id, pred, true, score, out, loss, reg_loss in zip(
-                    eval_ids,
-                    eval_preds or [None] * len(eval_ids),
-                    eval_true or [None] * len(eval_ids),
-                    eval_scores or [None] * len(eval_ids),
-                    eval_outs or [None] * len(eval_ids),
-                    eval_losses or [None] * len(eval_ids),
-                    eval_reg_losses or [None] * len(eval_ids),
-                )
-            }
-
-        return results, sample_info
+        return eval_outs, identify(eval_outs_id)
 
     def get_eval_preds_from_batch(
         self, logits: torch.Tensor
@@ -1170,34 +1278,33 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def evaluation_metrics(
         self,
-        eval_ids: list[Any],
-        eval_true: list[int],
-        eval_preds: list[int],
-        eval_scores: list[float],
-        eval_losses: list[float],
-        eval_reg_losses: list[float],
+        eval_outs: dict[str, Any],
+        eval_outs_id: dict[str, Any],
+        eval_extras: dict[str, Any],
         data_loader: DataLoader | None = None,
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Computes evaluation metrics (beyond evaluation loss).
 
         Args:
-            eval_ids: IDs of examples (used for example to group)
-            eval_true: ground-truth labels.
-            eval_preds: predictions.
-            eval_scores: prediction scores.
-            eval_losses: losses.
-            eval_reg_losses: regularization losses.
-            data_loader: DataLoader where data came from.
+            eval_outs: dict of outputs from evaluation.
+            eval_outs_id: dict of list outputs from evaluation with correspondings IDs.
+            eval_extras: dict of any extra outputs from evaluation.
+            data_loader: dataset loader.
 
         Returns:
             A dict of metrics.
         """
         _, _, macro_f1_score, _ = precision_recall_fscore_support(
-            eval_true, eval_preds, average="macro", zero_division=0
+            eval_outs_id["gt"],
+            eval_outs_id["preds"],
+            average="macro",
+            zero_division=0,
         )
 
         results = dict(
-            eval_accuracy=accuracy_score(eval_true, eval_preds),
+            eval_accuracy=accuracy_score(
+                eval_outs_id["gt"], eval_outs_id["preds"]
+            ),
             macro_f1_score=macro_f1_score,
         )
 

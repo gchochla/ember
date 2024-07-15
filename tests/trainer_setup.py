@@ -16,6 +16,27 @@ class Trainer(BaseTrainer):
     def input_batch_args(self, batch):
         return batch[0]
 
+    def calculate_regularization_loss(
+        self,
+        intermediate_representations: torch.Tensor | None,
+        logits: torch.Tensor,
+        batch: Sequence[torch.Any],
+        train: bool,
+        aggregate: bool = True,
+        epoch: int | None = None,
+    ) -> torch.Tensor:
+        probs = logits.softmax(dim=-1)
+        entropy = (-probs.log() * probs).sum(dim=-1)
+        if aggregate:
+            entropy = entropy.mean()
+
+        l2 = sum(p.square().sum() for p in self.model.parameters())
+
+        loss = {"entropy": -entropy, "l2": l2}
+        coef = {"entropy": 0.1, "l2": 0.002}
+
+        return loss, coef
+
 
 def parse_args():
     parser = gridparse.GridArgumentParser()
