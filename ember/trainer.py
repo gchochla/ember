@@ -713,7 +713,7 @@ class BaseTrainer(LoggingMixin, ABC):
         criterion = nn.CrossEntropyLoss(
             reduction="mean" if aggregate else "none"
         )
-        return criterion(logits, labels)
+        return criterion(logits, labels), 1.0
 
     def calculate_regularization_loss(
         self,
@@ -744,11 +744,11 @@ class BaseTrainer(LoggingMixin, ABC):
             Regularization loss (or a dummy 0 tensor on the proper device).
         """
         if aggregate:
-            return torch.tensor(0.0, device=self.exp_manager.device)
+            return torch.tensor(0.0, device=self.exp_manager.device), 1.0
         labels = self.batch_labels(batch)
         if not train:
             labels = self.accelerator.gather_for_metrics(labels)
-        return torch.zeros(len(labels), device=self.exp_manager.device)
+        return torch.zeros(len(labels), device=self.exp_manager.device), 1.0
 
     def calculate_loss(
         self,
@@ -1287,7 +1287,9 @@ class BaseTrainer(LoggingMixin, ABC):
 
         Args:
             eval_outs: dict of outputs from evaluation.
-            eval_outs_id: dict of list outputs from evaluation with correspondings IDs.
+            eval_outs_id: dict of list outputs from evaluation with
+                correspondings IDs. Always contains keys "preds",
+                "gt", "scores", and "ids".
             eval_extras: dict of any extra outputs from evaluation.
             data_loader: dataset loader.
 
