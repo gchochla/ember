@@ -1049,7 +1049,9 @@ class BaseTrainer(LoggingMixin, ABC):
                                 step=n_samples,
                                 mode="dev",
                             )
-                            results.update(aggr_results)
+                            results.update(
+                                {"dev_" + k: v for k, v in aggr_results.items()}
+                            )
 
                         self.log(
                             f"Step {step+1} (epoch {epoch+1}) metrics on "
