@@ -1047,6 +1047,7 @@ class BaseTrainer(LoggingMixin, ABC):
                             self.exp_manager.set_dict_metrics(
                                 {**aggr_results, **(sample_info or {})},
                                 step=n_samples,
+                                mode="dev",
                             )
                             results.update(aggr_results)
 
@@ -1098,7 +1099,7 @@ class BaseTrainer(LoggingMixin, ABC):
             )
             # check if steps need to be added here
             self.exp_manager.set_dict_metrics(
-                {**results, **(sample_info or {})}, test=True
+                {**results, **(sample_info or {})}, mode="test"
             )
 
         self.run_end()
@@ -1108,11 +1109,12 @@ class BaseTrainer(LoggingMixin, ABC):
         data_loader: DataLoader,
         tqdm_message: str | None = "Evaluation",
         epoch: int | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         """Evaluates the model on the given dataset.
 
         Returns:
-            Inference results without and with IDs.
+            Inference results without and with IDs, and any extra data from
+            `get_extra_data_from_model`.
         """
 
         batch_itr = (
@@ -1243,6 +1245,10 @@ class BaseTrainer(LoggingMixin, ABC):
         Args:
             data_loader: dataset to evaluate on.
             tqdm_message: what to print if tqdm is used.
+
+        Returns:
+            A dict of metrics and a dict of metrics indexed by
+            the ID of each example.
         """
 
         self.model.eval()
@@ -1267,7 +1273,7 @@ class BaseTrainer(LoggingMixin, ABC):
 
     def get_eval_preds_from_batch(
         self, logits: torch.Tensor
-    ) -> list[list[int]]:
+    ) -> list[int] | list[list[int]] | list[float] | list[list[float]]:
         """Returns predictions in batch based on logits."""
         return logits.argmax(-1).tolist()
 
@@ -1277,7 +1283,9 @@ class BaseTrainer(LoggingMixin, ABC):
         """Returns prediction scores in batch based on logits."""
         return logits.softmax(-1).tolist()
 
-    def get_eval_true_from_batch(self, labels: torch.Tensor) -> list[list[int]]:
+    def get_eval_true_from_batch(
+        self, labels: torch.Tensor
+    ) -> list[int] | list[list[int]] | list[float] | list[list[float]]:
         """Returns list of ground-truth labels."""
         return labels.tolist()
 
