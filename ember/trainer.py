@@ -389,9 +389,13 @@ class BaseTrainer(LoggingMixin, ABC):
     def save_trainer_checkpoint(self, current_epoch: int):
         """Saves checkpoint for trainer."""
         if not self.exp_manager.disable_intermediate_checkpoints:
-            self.accelerator.save(
-                self._checkpoint_dict(current_epoch), self._checkpoint_fn()
-            )
+            try:
+                self.accelerator.save(
+                    self._checkpoint_dict(current_epoch), self._checkpoint_fn()
+                )
+            except KeyboardInterrupt as e:
+                self.save_trainer_checkpoint(current_epoch)
+                raise e
 
     def load_trainer_checkpoint(self) -> int:
         """Loads checkpoint for trainer. Returns starting epoch."""
