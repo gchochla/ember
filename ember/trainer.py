@@ -322,6 +322,10 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.exp_manager.save_model,
                 logger=self.get_logger(),
             )
+        if not self.exp_manager.early_stopping_metric.startswith("dev_"):
+            self.exp_manager.early_stopping_metric = (
+                "dev_" + self.early_stopping.metric
+            )
 
         self.verbose = not self.exp_manager.disable_tqdm
 
