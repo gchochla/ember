@@ -14,7 +14,10 @@ class Trainer(BaseTrainer):
         super().__init__(*args, **kwargs)
 
     def input_batch_args(self, batch):
-        return batch[0]
+        return batch[1]
+
+    def batch_ids(self, batch: Sequence[torch.Any] | Mapping[str, torch.Any]):
+        return batch[0].tolist()
 
     def calculate_regularization_loss(
         self,
@@ -60,14 +63,17 @@ def main():
 
     # create dummy datasets and model
     train_ds = TensorDataset(
+        torch.arange(train_len),
         torch.randn(train_len, feat_dim),
         torch.randint(0, num_classes, (train_len,)),
     )
     dev_ds = TensorDataset(
+        torch.arange(dev_len),
         torch.randn(dev_len, feat_dim),
         torch.randint(0, num_classes, (dev_len,)),
     )
     test_ds = TensorDataset(
+        torch.arange(test_len),
         torch.randn(test_len, feat_dim),
         torch.randint(0, num_classes, (test_len,)),
     )

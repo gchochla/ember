@@ -234,6 +234,12 @@ class BaseTrainer(LoggingMixin, ABC):
                 help="disable intermediate checkpoints",
                 metadata=dict(disable_comparison=True),
             ),
+            disable_indexed_logging=dict(
+                action="store_true",
+                help="disable indexed logging, aka per-example metrics, for the dev set "
+                "(usually to save disk space when examples and metrics are many)",
+                metadata=dict(disable_comparison=True),
+            ),
         )
 
         early_stopping = EarlyStopping.argparse_args()
@@ -814,7 +820,7 @@ class BaseTrainer(LoggingMixin, ABC):
         reg_loss, reg_coef = unpack_return_loss(reg_loss, "regularization_loss")
 
         total_loss = sum(
-            (train_coef | reg_coef)[k] * loss
+            (train_coef | reg_coef)[k] * torch.nan_to_num(loss)
             for k, loss in (train_loss | reg_loss).items()
         )
 
@@ -1051,10 +1057,15 @@ class BaseTrainer(LoggingMixin, ABC):
                                 f"Evaluating after {step+1} steps (epoch {epoch+1})",
                                 epoch=epoch,
                             )
+                            if self.exp_manager.disable_indexed_logging:
+                                log_results = aggr_results
+                            else:
+                                log_results = {
+                                    **aggr_results,
+                                    **(sample_info or {}),
+                                }
                             self.exp_manager.set_dict_metrics(
-                                {**aggr_results, **(sample_info or {})},
-                                step=n_samples,
-                                mode="dev",
+                                log_results, step=n_samples, mode="dev"
                             )
                             results.update(
                                 {"dev_" + k: v for k, v in aggr_results.items()}
