@@ -1,6 +1,7 @@
 import tempfile
 import os
 from typing import Any
+from copy import deepcopy
 
 import torch
 from legm import LoggingMixin
@@ -53,7 +54,6 @@ class EarlyStopping(LoggingMixin):
         self,
         model: torch.nn.Module,
         patience: int | None,
-        save_model: bool = False,
         delta: float = 0,
         lower_better: bool = False,
         *args,
@@ -73,12 +73,7 @@ class EarlyStopping(LoggingMixin):
         super().__init__(*args, **kwargs)
 
         self.model = model
-        self.tmp_fn = (
-            tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
-            if save_model
-            else None
-        )
-        self.save_model = save_model
+        self.tmp_fn = tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
         self.saved = False
         self.patience = patience
         self.cnt = 0
@@ -90,36 +85,37 @@ class EarlyStopping(LoggingMixin):
 
     def cleanup(self):
         """Cleans up after early stopping."""
-        if self.tmp_fn is not None:
-            self.tmp_fn.close()
-            if os.path.exists(self.tmp_fn.name):
-                os.remove(self.tmp_fn.name)
+        self.tmp_fn.close()
+        if os.path.exists(self.tmp_fn.name):
+            os.remove(self.tmp_fn.name)
 
     def state_dict(self) -> dict[str, Any]:
         """Returns the state of the `EarlyStopping` instance."""
         return dict(
             saved=self.saved,
-            save_model=self.save_model,
             patience=self.patience,
             cnt=self.cnt,
             delta=self.delta,
             higher_better=self.higher_better,
             best=self.best,
             best_other=self.best_other,
+            best_model=self.best_model_state_dict(cleanup=False),
         )
 
     def load_state_dict(
         self, state_dict: dict[str, Any], model: torch.nn.Module
     ):
+        # save best model again first
+        best_model = deepcopy(model)
+        best_model.load_state_dict(state_dict.pop("best_model"))
+        self.tmp_fn = tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
+        self.model = best_model
+        self._save()
+
         for k, v in state_dict.items():
             setattr(self, k, v)
-        self.tmp_fn = (
-            tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
-            if self.save_model
-            else None
-        )
+        # now keep a reference of the current model
         self.model = model
-        self._save()
 
     def new_best(self, metric: float) -> bool:
         """Compares the `metric` appropriately to the current best.
@@ -181,19 +177,19 @@ class EarlyStopping(LoggingMixin):
 
     def _save(self):
         """Saves model and logs location."""
-        if self.tmp_fn is not None:
-            self.saved = True
-            torch.save(self.model.state_dict(), self.tmp_fn.name)
-            self.tmp_fn.seek(0)
-            self.log("Saved model to " + self.tmp_fn.name, "info")
+        self.saved = True
+        torch.save(self.model.state_dict(), self.tmp_fn.name)
+        self.tmp_fn.seek(0)
+        self.log("Saved model to " + self.tmp_fn.name, "info")
 
-    def best_model(self) -> torch.nn.Module:
-        """Loads last checkpoint (if any) and returns model."""
-        if self.tmp_fn is not None and self.saved:
-            state = torch.load(self.tmp_fn.name)
-            self.model.load_state_dict(state)
-            self.cleanup()
-        return self.model
+    def best_model_state_dict(self, cleanup=True) -> torch.nn.Module:
+        """Returns best model state dict."""
+        if self.saved:
+            state = torch.load(self.tmp_fn.name, weights_only=True)
+            if cleanup:
+                self.cleanup()
+            return state
+        return self.model.state_dict()
 
     def _store_best(self, metric: float, **kwargs):
         """Saves best metric and potentially other corresponsing

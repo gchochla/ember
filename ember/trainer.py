@@ -3,6 +3,7 @@ from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
 from time import time
 import warnings
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -313,7 +314,7 @@ class BaseTrainer(LoggingMixin, ABC):
             self.train_dataset or self.dev_dataset or self.test_dataset
         )
 
-        if hasattr(self.exp_manager, "early_stopping_patience"):
+        if self.exp_manager.early_stopping_patience is not None:
             self.early_stopping = EarlyStopping(
                 self.model,
                 self.exp_manager.early_stopping_patience,
@@ -372,9 +373,10 @@ class BaseTrainer(LoggingMixin, ABC):
             else:
                 self.log(f"Example sample from {split}: " + str(ds[0]), "debug")
 
-    def _model_state_dict(self):
+    def _model_state_dict(self, model: nn.Module | None = None):
         self.accelerator.wait_for_everyone()
-        state_dict = self.model.state_dict()
+        model = model if model is not None else self.model
+        state_dict = model.state_dict()
         return state_dict
 
     def _checkpoint_fn(self):
@@ -484,7 +486,7 @@ class BaseTrainer(LoggingMixin, ABC):
         """Loads best model to `model` attribute
         and saves to experiment folder."""
 
-        self.model = self.early_stopping.best_model()
+        self.model.load_state_dict(self.early_stopping.best_model_state_dict())
         if self.exp_manager.save_model:
             self.accelerator.wait_for_everyone()
 
@@ -941,7 +943,10 @@ class BaseTrainer(LoggingMixin, ABC):
 
             for epoch in range(current_epoch, num_epochs):
                 if early_stop:
-                    # the other early stopping check only breaks from inner loop
+                    # the other early stopping checks only break from inner loop
+                    self.model.load_state_dict(
+                        self.early_stopping.best_model_state_dict(cleanup=False)
+                    )
                     break
 
                 # use tqdm is possible with dataloader
@@ -1111,6 +1116,8 @@ class BaseTrainer(LoggingMixin, ABC):
             )
 
         if self.do_test:
+            # if train with early stopping,
+            # best model is loaded when breaking out of train loop
             results, sample_info = self.evaluate(test_data_loader, "Testing")
             self.log(
                 f"Testing metrics for {self.test_dataset_names}: "

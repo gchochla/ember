@@ -79,7 +79,7 @@ def main():
     )
     model = nn.Linear(feat_dim, num_classes)
 
-    exp_mngr = ExperimentManager("logs/", "Tests")
+    exp_mngr = ExperimentManager("logs/", "Tests", logging_level="debug")
     exp_mngr.set_namespace_params(args)
     exp_mngr.set_param_metadata(metadata, args)
 
