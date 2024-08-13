@@ -486,7 +486,7 @@ class BaseTrainer(LoggingMixin, ABC):
                             ):
                                 loaded_state_dict[k] = model_state_dict[k]
 
-                self.model.load_state_dict(loaded_state_dict)
+                self.load_model_state_dict(self.model, loaded_state_dict)
 
             self.model = self.accelerator.prepare(self.model)
 
@@ -956,8 +956,11 @@ class BaseTrainer(LoggingMixin, ABC):
             for epoch in range(current_epoch, num_epochs):
                 if early_stop:
                     # the other early stopping checks only break from inner loop
-                    self.model.load_state_dict(
-                        self.early_stopping.best_model_state_dict(cleanup=False)
+                    self.load_model_state_dict(
+                        self.model,
+                        self.early_stopping.best_model_state_dict(
+                            cleanup=False
+                        ),
                     )
                     break
 
