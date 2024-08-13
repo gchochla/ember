@@ -3,7 +3,6 @@ from typing import Sequence, Any, Mapping
 from abc import ABC, abstractmethod
 from time import time
 import warnings
-from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -320,6 +319,8 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.exp_manager.early_stopping_patience,
                 self.exp_manager.save_model,
                 lower_better=self.exp_manager.early_stopping_lower_better,
+                get_sd_func=self.get_model_state_dict,
+                load_sd_func=self.load_model_state_dict,
                 logger=self.get_logger(),
             )
         else:
@@ -327,6 +328,8 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.model,
                 None,
                 self.exp_manager.save_model,
+                get_sd_func=self.get_model_state_dict,
+                load_sd_func=self.load_model_state_dict,
                 logger=self.get_logger(),
             )
         if (
@@ -373,11 +376,15 @@ class BaseTrainer(LoggingMixin, ABC):
             else:
                 self.log(f"Example sample from {split}: " + str(ds[0]), "debug")
 
-    def _model_state_dict(self, model: nn.Module | None = None):
-        self.accelerator.wait_for_everyone()
-        model = model if model is not None else self.model
-        state_dict = model.state_dict()
-        return state_dict
+    @staticmethod
+    def get_model_state_dict(model: nn.Module) -> dict[str, nn.Parameter]:
+        return model.state_dict()
+
+    @staticmethod
+    def load_model_state_dict(
+        model: nn.Module, state_dict: dict[str, nn.Parameter]
+    ):
+        model.load_state_dict(state_dict)
 
     def _checkpoint_fn(self):
         return os.path.join(
@@ -385,11 +392,14 @@ class BaseTrainer(LoggingMixin, ABC):
         )
 
     def _checkpoint_dict(self, current_epoch):
+        self.accelerator.wait_for_everyone()
         return dict(
             optimizer=getattr(self.optimizer, "state_dict", lambda: None)(),
             scheduler=getattr(self.scheduler, "state_dict", lambda: None)(),
             early_stopping=self.early_stopping.state_dict(),
-            model=self._model_state_dict() if self.do_train else None,
+            model=(
+                self.get_model_state_dict(self.model) if self.do_train else None
+            ),
             exp_manager=self.exp_manager.__getstate__(),
             current_epoch=current_epoch + 1,
         )
@@ -421,7 +431,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 self.optimizer.load_state_dict(ckpt["optimizer"])
             if ckpt["scheduler"]:
                 self.scheduler.load_state_dict(ckpt["scheduler"])
-            self.model.load_state_dict(ckpt["model"])
+            self.load_model_state_dict(self.model, ckpt["model"])
             self.early_stopping.load_state_dict(
                 ckpt["early_stopping"], self.model
             )
@@ -486,12 +496,14 @@ class BaseTrainer(LoggingMixin, ABC):
         """Loads best model to `model` attribute
         and saves to experiment folder."""
 
-        self.model.load_state_dict(self.early_stopping.best_model_state_dict())
+        self.load_model_state_dict(
+            self.model, self.early_stopping.best_model_state_dict()
+        )
         if self.exp_manager.save_model:
             self.accelerator.wait_for_everyone()
 
             model_fn = self.exp_manager.get_save_filename()
-            torch.save(self._model_state_dict(), model_fn)
+            torch.save(self.get_model_state_dict(self.model), model_fn)
             if self.exp_manager.model_save_filename:
                 os.symlink(model_fn, self.exp_manager.model_save_filename)
             self.model.to(self.exp_manager.device)

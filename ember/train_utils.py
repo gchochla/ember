@@ -1,6 +1,6 @@
 import tempfile
 import os
-from typing import Any
+from typing import Any, Callable
 from copy import deepcopy
 
 import torch
@@ -56,6 +56,8 @@ class EarlyStopping(LoggingMixin):
         patience: int | None,
         delta: float = 0,
         lower_better: bool = False,
+        get_sd_func: Callable | None = None,
+        load_sd_func: Callable | None = None,
         *args,
         **kwargs,
     ):
@@ -63,11 +65,12 @@ class EarlyStopping(LoggingMixin):
 
         Args:
             model: nn.Module to be saved.
-            save_model: whether to save model.
             patience: early stopping patience, if `None then no early stopping.
             delta: difference before new metric is considered better that
                 the previous best one.
             lower_better: whether a lower metric is better.
+            get_sd_func: function to get state dict from model.
+            load_sd_func: function to load state dict into model.
         """
 
         super().__init__(*args, **kwargs)
@@ -82,6 +85,14 @@ class EarlyStopping(LoggingMixin):
 
         self.best = None
         self.best_other = {}
+
+        if get_sd_func is None:
+            get_sd_func = lambda m: m.state_dict()
+        self.get_sd_func = get_sd_func
+
+        if load_sd_func is None:
+            load_sd_func = lambda m, sd: m.load_state_dict(sd)
+        self.load_sd_func = load_sd_func
 
     def cleanup(self):
         """Cleans up after early stopping."""
@@ -107,7 +118,11 @@ class EarlyStopping(LoggingMixin):
     ):
         # save best model again first
         best_model = deepcopy(model)
-        best_model.load_state_dict(state_dict.pop("best_model"))
+        if "best_model" in state_dict:
+            sd = state_dict.pop("best_model")
+        else:
+            sd = self.get_sd_func(best_model)
+        self.load_sd_func(best_model, sd)
         self.tmp_fn = tempfile.NamedTemporaryFile(mode="r+", suffix=".pt")
         self.model = best_model
         self._save()
@@ -178,7 +193,7 @@ class EarlyStopping(LoggingMixin):
     def _save(self):
         """Saves model and logs location."""
         self.saved = True
-        torch.save(self.model.state_dict(), self.tmp_fn.name)
+        torch.save(self.get_sd_func(self.model), self.tmp_fn.name)
         self.tmp_fn.seek(0)
         self.log("Saved model to " + self.tmp_fn.name, "info")
 
@@ -189,7 +204,7 @@ class EarlyStopping(LoggingMixin):
             if cleanup:
                 self.cleanup()
             return state
-        return self.model.state_dict()
+        return self.get_sd_func(self.model)
 
     def _store_best(self, metric: float, **kwargs):
         """Saves best metric and potentially other corresponsing
