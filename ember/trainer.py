@@ -317,7 +317,6 @@ class BaseTrainer(LoggingMixin, ABC):
             self.early_stopping = EarlyStopping(
                 self.model,
                 self.exp_manager.early_stopping_patience,
-                self.exp_manager.save_model,
                 lower_better=self.exp_manager.early_stopping_lower_better,
                 get_sd_func=self.get_model_state_dict,
                 load_sd_func=self.load_model_state_dict,
@@ -327,7 +326,6 @@ class BaseTrainer(LoggingMixin, ABC):
             self.early_stopping = EarlyStopping(
                 self.model,
                 None,
-                self.exp_manager.save_model,
                 get_sd_func=self.get_model_state_dict,
                 load_sd_func=self.load_model_state_dict,
                 logger=self.get_logger(),
