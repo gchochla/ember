@@ -276,7 +276,8 @@ class BaseTrainer(LoggingMixin, ABC):
         )
         self.exp_manager.start()
         self.accelerator.wait_for_everyone()
-        self.exp_manager.device = self.accelerator.device
+        if self.exp_manager.device is None:
+            self.exp_manager.device = self.accelerator.device
 
         super().__init__(
             *args,
@@ -545,21 +546,23 @@ class BaseTrainer(LoggingMixin, ABC):
     ) -> Sequence[Any] | Mapping[str, Any]:
         """Get batch as returned by DataLoader to device."""
 
+        device = (
+            "cuda"
+            if self.exp_manager.device == "auto"
+            else self.exp_manager.device
+        )
+
         if isinstance(batch, Sequence):
             device_batch = []
             for elem in batch:
                 # TENSOR
                 if torch.is_tensor(elem):
-                    device_batch.append(elem.to(self.exp_manager.device))
+                    device_batch.append(elem.to(device))
                 # DICTIONARY
                 elif isinstance(elem, dict):
                     device_batch.append(
                         {
-                            k: (
-                                v.to(self.exp_manager.device)
-                                if torch.is_tensor(v)
-                                else v
-                            )
+                            k: (v.to(device) if torch.is_tensor(v) else v)
                             for k, v in elem.items()
                         }
                     )
@@ -567,11 +570,7 @@ class BaseTrainer(LoggingMixin, ABC):
                 elif isinstance(elem, Sequence):
                     device_batch.append(
                         [
-                            (
-                                v.to(self.exp_manager.device)
-                                if torch.is_tensor(v)
-                                else v
-                            )
+                            (v.to(device) if torch.is_tensor(v) else v)
                             for v in elem
                         ]
                     )
@@ -583,23 +582,15 @@ class BaseTrainer(LoggingMixin, ABC):
             device_batch = {}
             for k, v in batch.items():
                 if torch.is_tensor(v):
-                    device_batch[k] = v.to(self.exp_manager.device)
+                    device_batch[k] = v.to(device)
                 elif isinstance(v, Mapping):
                     device_batch[k] = {
-                        k2: (
-                            v2.to(self.exp_manager.device)
-                            if torch.is_tensor(v2)
-                            else v2
-                        )
+                        k2: (v2.to(device) if torch.is_tensor(v2) else v2)
                         for k2, v2 in v.items()
                     }
                 elif isinstance(v, Sequence):
                     device_batch[k] = [
-                        (
-                            v2.to(self.exp_manager.device)
-                            if torch.is_tensor(v2)
-                            else v2
-                        )
+                        (v2.to(device) if torch.is_tensor(v2) else v2)
                         for v2 in v
                     ]
                 else:
@@ -632,6 +623,8 @@ class BaseTrainer(LoggingMixin, ABC):
             args, kwargs = input, {}
             if not isinstance(args, (list, tuple)):
                 args = (args,)
+
+        print(args, kwargs)
 
         return self.model(*args, **kwargs)
 
@@ -772,12 +765,19 @@ class BaseTrainer(LoggingMixin, ABC):
         Returns:
             Regularization loss (or a dummy 0 tensor on the proper device).
         """
+
+        device = (
+            "cuda"
+            if self.exp_manager.device == "auto"
+            else self.exp_manager.device
+        )
+
         if aggregate:
-            return torch.tensor(0.0, device=self.exp_manager.device), 1.0
+            return torch.tensor(0.0, device=device), 1.0
         labels = self.batch_labels(batch)
         if not train:
             labels = self.accelerator.gather_for_metrics(labels)
-        return torch.zeros(len(labels), device=self.exp_manager.device), 1.0
+        return torch.zeros(len(labels), device=device), 1.0
 
     def calculate_loss(
         self,
@@ -921,7 +921,8 @@ class BaseTrainer(LoggingMixin, ABC):
         """(If train set was provided) trains and
         (if a dev set or test set was provided) evaluates the model."""
 
-        self.model = self.model.to(self.exp_manager.device)
+        if self.exp_manager.device != "auto":
+            self.model = self.model.to(self.exp_manager.device)
         self.model.train()
         current_epoch = self.run_init() or 0
 
@@ -1176,7 +1177,7 @@ class BaseTrainer(LoggingMixin, ABC):
         eval_extras = {}
 
         for batch in batch_itr:
-            batch = self.batch_to_device(batch)
+            # batch = self.batch_to_device(batch)
 
             with torch.no_grad():
                 return_vals = self._get_return_vals_from_model(batch)
