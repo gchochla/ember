@@ -624,8 +624,6 @@ class BaseTrainer(LoggingMixin, ABC):
             if not isinstance(args, (list, tuple)):
                 args = (args,)
 
-        print(args, kwargs)
-
         return self.model(*args, **kwargs)
 
     def batch_labels(self, batch: Sequence[Any] | Mapping[str, Any]):
